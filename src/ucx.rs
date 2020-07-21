@@ -132,6 +132,10 @@ impl<'a> Worker<'a> {
     pub fn create_listener(&self, addr: SocketAddr) -> Listener<'_, '_> {
         Listener::new(self, addr)
     }
+
+    pub fn create_endpoint(&self, addr: SocketAddr) -> Endpoint<'_, '_> {
+        Endpoint::new(self, addr)
+    }
 }
 
 #[derive(Debug)]
@@ -190,11 +194,76 @@ impl<'a, 'b: 'a> Listener<'a, 'b> {
             worker,
         }
     }
+
+    fn socket_addr(&self) -> SocketAddr {
+        let mut attr = ucp_listener_attr_t {
+            field_mask: ucp_listener_attr_field::UCP_LISTENER_ATTR_FIELD_SOCKADDR.0 as u64,
+            sockaddr: unsafe { MaybeUninit::uninit().assume_init() },
+        };
+        let status = unsafe { ucp_listener_query(self.handle, &mut attr) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        let sockaddr = unsafe {
+            os_socketaddr::OsSocketAddr::from_raw_parts(&attr.sockaddr as *const _ as _, 6)
+        };
+        sockaddr.into_addr().unwrap()
+    }
 }
 
 impl<'a, 'b: 'a> Drop for Listener<'a, 'b> {
     fn drop(&mut self) {
         unsafe { ucp_listener_destroy(self.handle) }
+    }
+}
+
+#[derive(Debug)]
+struct Endpoint<'a, 'b: 'a> {
+    handle: ucp_ep_h,
+    worker: &'b Worker<'a>,
+}
+
+impl<'a, 'b: 'a> Endpoint<'a, 'b> {
+    fn new(worker: &'b Worker<'a>, addr: SocketAddr) -> Self {
+        unsafe extern "C" fn err_handler(
+            arg: *mut ::std::os::raw::c_void,
+            ep: ucp_ep_h,
+            status: ucs_status_t,
+        ) {
+            println!("err");
+        }
+        let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
+        let params = ucp_ep_params {
+            field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
+                .0 as u64,
+            flags: ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_CLIENT_SERVER.0,
+            sockaddr: ucs_sock_addr {
+                addr: sockaddr.as_ptr() as _,
+                addrlen: sockaddr.len(),
+            },
+            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
+            err_handler: ucp_err_handler {
+                cb: Some(err_handler),
+                arg: null_mut(),
+            },
+            user_data: null_mut(),
+            address: null_mut(),
+            conn_request: null_mut(),
+        };
+        let mut handle = MaybeUninit::uninit();
+        let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        Endpoint {
+            handle: unsafe { handle.assume_init() },
+            worker,
+        }
+    }
+}
+
+impl<'a, 'b: 'a> Drop for Endpoint<'a, 'b> {
+    fn drop(&mut self) {
+        unsafe { ucp_ep_destroy(self.handle) }
     }
 }
 
@@ -212,6 +281,13 @@ mod tests {
         let context = Context::new(&config);
         let worker = context.create_worker();
         let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
-        println!("{:?}", worker.address().as_ref());
+        println!("worker address = {:?}", worker.address().as_ref());
+        println!("listener sockaddr = {:?}", listener.socket_addr());
+
+        let worker2 = context.create_worker();
+        let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        addr.set_port(listener.socket_addr().port());
+        let endpoint = worker2.create_endpoint(addr);
+        println!("finish!");
     }
 }
