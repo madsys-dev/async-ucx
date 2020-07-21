@@ -51,6 +51,7 @@ impl Context {
             tag_sender_mask: 0,
             mt_workers_shared: 0,
             estimated_num_eps: 0,
+            estimated_num_ppn: 0,
         };
         let mut handle = MaybeUninit::uninit();
         let status = unsafe {
@@ -69,21 +70,7 @@ impl Context {
     }
 
     pub fn create_worker(&self) -> Worker<'_> {
-        let params = ucp_worker_params_t {
-            field_mask: ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE.0 as u64,
-            thread_mode: ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE,
-            cpu_mask: ucs_cpu_set_t { ucs_bits: [0; 16] },
-            events: 0,
-            event_fd: 0,
-            user_data: null_mut(),
-        };
-        let mut handle = MaybeUninit::uninit();
-        let status = unsafe { ucp_worker_create(self.handle, &params, handle.as_mut_ptr()) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
-        Worker {
-            handle: unsafe { handle.assume_init() },
-            context: self,
-        }
+        Worker::new(self)
     }
 }
 
@@ -106,6 +93,24 @@ impl<'a> Drop for Worker<'a> {
 }
 
 impl<'a> Worker<'a> {
+    fn new(context: &'a Context) -> Self {
+        let params = ucp_worker_params_t {
+            field_mask: ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE.0 as u64,
+            thread_mode: ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE,
+            cpu_mask: ucs_cpu_set_t { ucs_bits: [0; 16] },
+            events: 0,
+            event_fd: 0,
+            user_data: null_mut(),
+        };
+        let mut handle = MaybeUninit::uninit();
+        let status = unsafe { ucp_worker_create(context.handle, &params, handle.as_mut_ptr()) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        Worker {
+            handle: unsafe { handle.assume_init() },
+            context,
+        }
+    }
+
     fn print_to_stderr(&self) {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
     }
@@ -124,7 +129,38 @@ impl<'a> Worker<'a> {
         }
     }
 
-    fn create_listener(&self, addr: SocketAddr) -> Listener {
+    pub fn create_listener(&self, addr: SocketAddr) -> Listener<'_, '_> {
+        Listener::new(self, addr)
+    }
+}
+
+#[derive(Debug)]
+pub struct WorkerAddress<'a, 'b: 'a> {
+    handle: *mut ucp_address_t,
+    length: usize,
+    worker: &'b Worker<'a>,
+}
+
+impl<'a, 'b: 'a> AsRef<[u8]> for WorkerAddress<'a, 'b> {
+    fn as_ref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.handle as *const u8, self.length) }
+    }
+}
+
+impl<'a, 'b: 'a> Drop for WorkerAddress<'a, 'b> {
+    fn drop(&mut self) {
+        unsafe { ucp_worker_release_address(self.worker.handle, self.handle) }
+    }
+}
+
+#[derive(Debug)]
+struct Listener<'a, 'b: 'a> {
+    handle: ucp_listener_h,
+    worker: &'b Worker<'a>,
+}
+
+impl<'a, 'b: 'a> Listener<'a, 'b> {
+    fn new(worker: &'b Worker<'a>, addr: SocketAddr) -> Self {
         unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut ::std::os::raw::c_void) {
             println!("accept");
         }
@@ -147,32 +183,13 @@ impl<'a> Worker<'a> {
             },
         };
         let mut handle = MaybeUninit::uninit();
-        let status = unsafe { ucp_listener_create(self.handle, &params, handle.as_mut_ptr()) };
+        let status = unsafe { ucp_listener_create(worker.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         Listener {
             handle: unsafe { handle.assume_init() },
-            worker: self,
+            worker,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct WorkerAddress<'a, 'b: 'a> {
-    handle: *mut ucp_address_t,
-    length: usize,
-    worker: &'b Worker<'a>,
-}
-
-impl<'a, 'b: 'a> Drop for WorkerAddress<'a, 'b> {
-    fn drop(&mut self) {
-        unsafe { ucp_worker_release_address(self.worker.handle, self.handle) }
-    }
-}
-
-#[derive(Debug)]
-struct Listener<'a, 'b: 'a> {
-    handle: ucp_listener_h,
-    worker: &'b Worker<'a>,
 }
 
 impl<'a, 'b: 'a> Drop for Listener<'a, 'b> {
@@ -195,6 +212,6 @@ mod tests {
         let context = Context::new(&config);
         let worker = context.create_worker();
         let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
-        println!("{:?}", worker.address());
+        println!("{:?}", worker.address().as_ref());
     }
 }
