@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 ucx-sys = { path = "../ucx-sys" }
 tokio = { version = "0.2", features = ["full"] }
+os_socketaddr = "0.1"
