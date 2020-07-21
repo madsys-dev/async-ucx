@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use std::mem::MaybeUninit;
-use std::ptr::null;
+use std::ptr::{null, null_mut};
 use ucx_sys::*;
 
 #[derive(Debug)]
@@ -18,9 +18,6 @@ impl Config {
     }
 
     pub fn print_to_stderr(&self) {
-        extern "C" {
-            static stderr: *mut FILE;
-        }
         let flags = ucs_config_print_flags_t::UCS_CONFIG_PRINT_CONFIG
             | ucs_config_print_flags_t::UCS_CONFIG_PRINT_DOC
             | ucs_config_print_flags_t::UCS_CONFIG_PRINT_HEADER
@@ -41,8 +38,8 @@ pub struct UcpParams {
     inner: ucp_params_t,
 }
 
-impl UcpParams {
-    pub fn new() -> Self {
+impl Default for UcpParams {
+    fn default() -> Self {
         let inner = ucp_params_t {
             field_mask: ucp_params_field::UCP_PARAM_FIELD_FEATURES.0 as u64,
             features: (ucp_feature::UCP_FEATURE_STREAM | ucp_feature::UCP_FEATURE_WAKEUP).0 as u64,
@@ -78,12 +75,91 @@ impl Context {
         let handle = unsafe { handle.assume_init() };
         Context { handle }
     }
+
+    pub fn create_worker(&self, params: &WorkerParams) -> Worker<'_> {
+        let mut handle = MaybeUninit::uninit();
+        let status = unsafe { ucp_worker_create(self.handle, &params.inner, handle.as_mut_ptr()) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        let handle = unsafe { handle.assume_init() };
+        Worker {
+            handle,
+            context: self,
+        }
+    }
 }
 
 impl Drop for Context {
     fn drop(&mut self) {
         unsafe { ucp_cleanup(self.handle) };
     }
+}
+
+#[derive(Debug)]
+pub struct WorkerParams {
+    inner: ucp_worker_params_t,
+}
+
+impl Default for WorkerParams {
+    fn default() -> Self {
+        let inner = ucp_worker_params_t {
+            field_mask: ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE.0 as u64,
+            thread_mode: ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE,
+            cpu_mask: ucs_cpu_set_t { ucs_bits: [0; 16] },
+            events: 0,
+            event_fd: 0,
+            user_data: null_mut(),
+        };
+        WorkerParams { inner }
+    }
+}
+
+#[derive(Debug)]
+pub struct Worker<'a> {
+    handle: ucp_worker_h,
+    context: &'a Context,
+}
+
+impl<'a> Drop for Worker<'a> {
+    fn drop(&mut self) {
+        unsafe { ucp_worker_destroy(self.handle) }
+    }
+}
+
+impl<'a> Worker<'a> {
+    fn print_to_stderr(&self) {
+        unsafe { ucp_worker_print_info(self.handle, stderr) };
+    }
+
+    fn get_address(&self) -> WorkerAddress<'_, '_> {
+        let mut handle = MaybeUninit::uninit();
+        let mut length = MaybeUninit::uninit();
+        let status = unsafe {
+            ucp_worker_get_address(self.handle, handle.as_mut_ptr(), length.as_mut_ptr())
+        };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        WorkerAddress {
+            handle: unsafe { handle.assume_init() },
+            length: unsafe { length.assume_init() } as usize,
+            worker: self,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct WorkerAddress<'a, 'b: 'a> {
+    handle: *mut ucp_address_t,
+    length: usize,
+    worker: &'b Worker<'a>,
+}
+
+impl<'a, 'b: 'a> Drop for WorkerAddress<'a, 'b> {
+    fn drop(&mut self) {
+        unsafe { ucp_worker_release_address(self.worker.handle, self.handle) }
+    }
+}
+
+extern "C" {
+    static stderr: *mut FILE;
 }
 
 #[cfg(test)]
@@ -93,8 +169,7 @@ mod tests {
     #[test]
     fn new() {
         let config = Config::new();
-        config.print_to_stderr();
-        let params = UcpParams::new();
-        let context = Context::new(&params, &config);
+        let context = Context::new(&UcpParams::default(), &config);
+        let worker = context.create_worker(&WorkerParams::default());
     }
 }
