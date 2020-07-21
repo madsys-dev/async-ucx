@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use tokio::io::Result;
 use tokio::prelude::*;
 
-mod ucx;
+pub mod ucx;
 
 pub struct UcxStream {}
 

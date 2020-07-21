@@ -115,7 +115,7 @@ impl<'a> Worker<'a> {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
     }
 
-    fn address(&self) -> WorkerAddress<'_, '_> {
+    pub fn address(&self) -> WorkerAddress<'_, '_> {
         let mut handle = MaybeUninit::uninit();
         let mut length = MaybeUninit::uninit();
         let status = unsafe {
@@ -135,6 +135,10 @@ impl<'a> Worker<'a> {
 
     pub fn create_endpoint(&self, addr: SocketAddr) -> Endpoint<'_, '_> {
         Endpoint::new(self, addr)
+    }
+
+    pub fn progress(&self) -> u32 {
+        unsafe { ucp_worker_progress(self.handle) }
     }
 }
 
@@ -158,7 +162,7 @@ impl<'a, 'b: 'a> Drop for WorkerAddress<'a, 'b> {
 }
 
 #[derive(Debug)]
-struct Listener<'a, 'b: 'a> {
+pub struct Listener<'a, 'b: 'a> {
     handle: ucp_listener_h,
     worker: &'b Worker<'a>,
 }
@@ -195,7 +199,7 @@ impl<'a, 'b: 'a> Listener<'a, 'b> {
         }
     }
 
-    fn socket_addr(&self) -> SocketAddr {
+    pub fn socket_addr(&self) -> SocketAddr {
         let mut attr = ucp_listener_attr_t {
             field_mask: ucp_listener_attr_field::UCP_LISTENER_ATTR_FIELD_SOCKADDR.0 as u64,
             sockaddr: unsafe { MaybeUninit::uninit().assume_init() },
@@ -216,7 +220,7 @@ impl<'a, 'b: 'a> Drop for Listener<'a, 'b> {
 }
 
 #[derive(Debug)]
-struct Endpoint<'a, 'b: 'a> {
+pub struct Endpoint<'a, 'b: 'a> {
     handle: ucp_ep_h,
     worker: &'b Worker<'a>,
 }
@@ -234,15 +238,16 @@ impl<'a, 'b: 'a> Endpoint<'a, 'b> {
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
                 | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR
-                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER
-                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER)
                 .0 as u64,
             flags: ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_CLIENT_SERVER.0,
             sockaddr: ucs_sock_addr {
                 addr: sockaddr.as_ptr() as _,
                 addrlen: sockaddr.len(),
             },
-            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
+            // set NONE to enable TCP
+            // ref: https://github.com/rapidsai/ucx-py/issues/194#issuecomment-535726896
+            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_NONE,
             err_handler: ucp_err_handler {
                 cb: Some(err_handler),
                 arg: null_mut(),
@@ -279,15 +284,16 @@ mod tests {
     fn new() {
         let config = Config::new();
         let context = Context::new(&config);
-        let worker = context.create_worker();
-        let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
-        println!("worker address = {:?}", worker.address().as_ref());
+        let worker1 = context.create_worker();
+        let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
+        println!("worker address = {:?}", worker1.address().as_ref());
         println!("listener sockaddr = {:?}", listener.socket_addr());
 
         let worker2 = context.create_worker();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listener.socket_addr().port());
         let endpoint = worker2.create_endpoint(addr);
-        println!("finish!");
+
+        worker1.progress();
     }
 }
