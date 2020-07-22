@@ -60,14 +60,15 @@ impl Context {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_INIT
-                | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP)
+                | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP
+                | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
             features: (ucp_feature::UCP_FEATURE_STREAM | ucp_feature::UCP_FEATURE_WAKEUP).0 as u64,
             request_size: std::mem::size_of::<Request>() as u64,
             request_init: Some(Request::init),
             request_cleanup: Some(Request::cleanup),
             tag_sender_mask: 0,
-            mt_workers_shared: 0,
+            mt_workers_shared: 1,
             estimated_num_eps: 0,
             estimated_num_ppn: 0,
         };
@@ -161,6 +162,14 @@ impl Worker {
     pub fn wait(&self) {
         let status = unsafe { ucp_worker_wait(self.handle) };
         assert_eq!(status, ucs_status_t::UCS_OK);
+    }
+
+    pub fn arm(&self) {
+        let status = unsafe { ucp_worker_arm(self.handle) };
+        assert!(matches!(
+            status,
+            ucs_status_t::UCS_OK | ucs_status_t::UCS_ERR_BUSY
+        ));
     }
 
     pub fn progress(&self) -> u32 {

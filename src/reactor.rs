@@ -23,6 +23,7 @@ pub fn create_worker() -> Arc<Worker> {
             while worker.progress() != 0 {
                 tokio::task::yield_now().await;
             }
+            worker.arm();
         }
         registration.deregister(&worker).unwrap();
     });

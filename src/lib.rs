@@ -1,11 +1,6 @@
-use futures::pin_mut;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use tokio::io::Result;
-use tokio::prelude::*;
 
 mod reactor;
 pub mod ucx;
@@ -22,35 +17,23 @@ impl UcpStream {
         Ok(UcpStream { endpoint })
     }
 
+    // TODO: how to impl AsyncRead, AsyncWrite for UcpStream?
+
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let len = self.endpoint.stream_recv(buf).await;
+        Ok(len)
+    }
+
+    pub async fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        self.endpoint.stream_send(buf).await;
+        Ok(buf.len())
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr> {
         todo!()
     }
 
     pub fn peer_addr(&self) -> Result<SocketAddr> {
-        todo!()
-    }
-}
-
-impl AsyncRead for UcpStream {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<Result<usize>> {
-        let future = self.endpoint.stream_recv(buf);
-        pin_mut!(future);
-        future.poll(cx).map(|len| Ok(len))
-    }
-}
-
-impl AsyncWrite for UcpStream {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize>> {
-        let future = self.endpoint.stream_send(buf);
-        pin_mut!(future);
-        future.poll(cx).map(|_| Ok(buf.len()))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        todo!()
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
         todo!()
     }
 }
@@ -70,5 +53,9 @@ impl UcpListener {
     pub async fn accept(&self) -> Result<UcpStream> {
         let endpoint = self.listener.accept().await;
         Ok(UcpStream { endpoint })
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        Ok(self.listener.socket_addr())
     }
 }

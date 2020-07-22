@@ -20,13 +20,14 @@ async fn main() {
         let config = Config::new();
         let context = Context::new(&config);
         let worker = context.create_worker();
-        let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
+        let listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
         std::thread::spawn(move || loop {
             worker.wait();
             worker.progress();
         });
         println!("listening on {}", listener.socket_addr());
         let endpoint = listener.accept().await;
+        println!("accept");
         endpoint.print_to_stderr();
 
         let mut buf = [0; 10];
