@@ -1,5 +1,7 @@
+//! Mid-level bindings for UCX.
+
+use futures::future::poll_fn;
 use futures::task::AtomicWaker;
-use mio::event::Evented;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::future::Future;
@@ -10,7 +12,7 @@ use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex};
-use std::task::Poll;
+use std::task::{Poll, Waker};
 use ucx_sys::*;
 
 #[derive(Debug)]
@@ -156,6 +158,11 @@ impl Worker {
         Endpoint::new(self, addr)
     }
 
+    pub fn wait(&self) {
+        let status = unsafe { ucp_worker_wait(self.handle) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+    }
+
     pub fn progress(&self) -> u32 {
         unsafe { ucp_worker_progress(self.handle) }
     }
@@ -196,8 +203,14 @@ impl<'a> Drop for WorkerAddress<'a> {
 #[derive(Debug)]
 pub struct Listener {
     handle: ucp_listener_h,
-    incomings: Mutex<VecDeque<Endpoint>>,
+    incomings: Mutex<Queue>,
     worker: Arc<Worker>,
+}
+
+#[derive(Debug, Default)]
+struct Queue {
+    items: VecDeque<Endpoint>,
+    wakers: Vec<Waker>,
 }
 
 impl Listener {
@@ -208,7 +221,12 @@ impl Listener {
                 handle: ep,
                 worker: listener.worker.clone(),
             };
-            listener.incomings.lock().unwrap().push_back(endpoint);
+            let mut incomings = listener.incomings.lock().unwrap();
+            incomings.items.push_back(endpoint);
+            // wakeup one
+            if let Some(waker) = incomings.wakers.pop() {
+                waker.wake();
+            }
         }
         let mut listener = Arc::new(Listener {
             handle: unsafe { MaybeUninit::uninit().assume_init() },
@@ -252,8 +270,17 @@ impl Listener {
         sockaddr.into_addr().unwrap()
     }
 
-    pub fn accept(&self) -> Option<Endpoint> {
-        self.incomings.lock().unwrap().pop_front()
+    pub async fn accept(&self) -> Endpoint {
+        poll_fn(|cx| {
+            let mut incomings = self.incomings.lock().unwrap();
+            if let Some(endpoint) = incomings.items.pop_front() {
+                Poll::Ready(endpoint)
+            } else {
+                incomings.wakers.push(cx.waker().clone());
+                Poll::Pending
+            }
+        })
+        .await
     }
 }
 
@@ -271,18 +298,10 @@ pub struct Endpoint {
 
 impl Endpoint {
     fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Self {
-        unsafe extern "C" fn err_handler(
-            arg: *mut ::std::os::raw::c_void,
-            ep: ucp_ep_h,
-            status: ucs_status_t,
-        ) {
-            println!("err");
-        }
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
-                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR
-                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLER)
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR)
                 .0 as u64,
             flags: ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_CLIENT_SERVER.0,
             sockaddr: ucs_sock_addr {
@@ -293,7 +312,7 @@ impl Endpoint {
             // ref: https://github.com/rapidsai/ucx-py/issues/194#issuecomment-535726896
             err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_NONE,
             err_handler: ucp_err_handler {
-                cb: Some(err_handler),
+                cb: None,
                 arg: null_mut(),
             },
             user_data: null_mut(),
@@ -375,7 +394,7 @@ impl Drop for Endpoint {
 ///
 /// To enable this, set the following fields in `ucp_params_t` when initializing
 /// UCP context:
-/// ```no_run
+/// ```ignore
 /// ucp_params_t {
 ///     request_size: std::mem::size_of::<Request>() as u64,
 ///     request_init: Some(Request::init),
@@ -456,14 +475,18 @@ extern "C" {
 mod tests {
     use super::*;
 
-    #[test]
-    fn new() {
+    #[tokio::test]
+    async fn new() {
         let config = Config::new();
         let context = Context::new(&config);
         let worker1 = context.create_worker();
         let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
         let listen_port = listener.socket_addr().port();
 
+        std::thread::spawn(move || loop {
+            worker1.wait();
+            worker1.progress();
+        });
         std::thread::spawn(move || {
             let worker2 = context.create_worker();
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -471,7 +494,6 @@ mod tests {
             let endpoint = worker2.create_endpoint(addr);
         });
 
-        while worker1.progress() == 0 {}
-        let endpoint = listener.accept().unwrap();
+        let endpoint = listener.accept().await;
     }
 }

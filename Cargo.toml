@@ -12,3 +12,4 @@ tokio = { version = "0.2", features = ["full"] }
 os_socketaddr = "0.1"
 mio = "0.6"
 futures = "0.3"
+lazy_static = "1.4"

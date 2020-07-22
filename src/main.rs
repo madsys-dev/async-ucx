@@ -10,6 +10,7 @@ async fn main() {
         let endpoint = worker.create_endpoint(server_addr.parse().unwrap());
         endpoint.print_to_stderr();
         std::thread::spawn(move || loop {
+            worker.wait();
             worker.progress();
         });
 
@@ -20,13 +21,13 @@ async fn main() {
         let context = Context::new(&config);
         let worker = context.create_worker();
         let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
-        println!("listening on {}", listener.socket_addr());
-        while worker.progress() == 0 {}
-        let endpoint = listener.accept().unwrap();
-        endpoint.print_to_stderr();
         std::thread::spawn(move || loop {
+            worker.wait();
             worker.progress();
         });
+        println!("listening on {}", listener.socket_addr());
+        let endpoint = listener.accept().await;
+        endpoint.print_to_stderr();
 
         let mut buf = [0; 10];
         let len = endpoint.stream_recv(&mut buf).await;
