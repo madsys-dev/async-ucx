@@ -2,6 +2,7 @@ use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::ptr::{null, null_mut};
+use std::sync::Arc;
 use ucx_sys::*;
 
 #[derive(Debug)]
@@ -41,7 +42,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config) -> Arc<Self> {
         let params = ucp_params_t {
             field_mask: ucp_params_field::UCP_PARAM_FIELD_FEATURES.0 as u64,
             features: (ucp_feature::UCP_FEATURE_STREAM | ucp_feature::UCP_FEATURE_WAKEUP).0 as u64,
@@ -64,12 +65,12 @@ impl Context {
             )
         };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        Context {
+        Arc::new(Context {
             handle: unsafe { handle.assume_init() },
-        }
+        })
     }
 
-    pub fn create_worker(&self) -> Worker<'_> {
+    pub fn create_worker(self: &Arc<Self>) -> Arc<Worker> {
         Worker::new(self)
     }
 }
@@ -81,22 +82,22 @@ impl Drop for Context {
 }
 
 #[derive(Debug)]
-pub struct Worker<'a> {
+pub struct Worker {
     handle: ucp_worker_h,
-    context: &'a Context,
+    context: Arc<Context>,
 }
 
-impl<'a> Drop for Worker<'a> {
+impl Drop for Worker {
     fn drop(&mut self) {
         unsafe { ucp_worker_destroy(self.handle) }
     }
 }
 
-impl<'a> Worker<'a> {
-    fn new(context: &'a Context) -> Self {
+impl Worker {
+    fn new(context: &Arc<Context>) -> Arc<Self> {
         let params = ucp_worker_params_t {
             field_mask: ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE.0 as u64,
-            thread_mode: ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE,
+            thread_mode: ucs_thread_mode_t::UCS_THREAD_MODE_MULTI,
             cpu_mask: ucs_cpu_set_t { ucs_bits: [0; 16] },
             events: 0,
             event_fd: 0,
@@ -105,17 +106,17 @@ impl<'a> Worker<'a> {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_worker_create(context.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        Worker {
+        Arc::new(Worker {
             handle: unsafe { handle.assume_init() },
-            context,
-        }
+            context: context.clone(),
+        })
     }
 
     fn print_to_stderr(&self) {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
     }
 
-    pub fn address(&self) -> WorkerAddress<'_, '_> {
+    pub fn address(&self) -> WorkerAddress<'_> {
         let mut handle = MaybeUninit::uninit();
         let mut length = MaybeUninit::uninit();
         let status = unsafe {
@@ -129,46 +130,53 @@ impl<'a> Worker<'a> {
         }
     }
 
-    pub fn create_listener(&self, addr: SocketAddr) -> Listener<'_, '_> {
+    pub fn create_listener(self: &Arc<Self>, addr: SocketAddr) -> Listener {
         Listener::new(self, addr)
     }
 
-    pub fn create_endpoint(&self, addr: SocketAddr) -> Endpoint<'_, '_> {
+    pub fn create_endpoint(self: &Arc<Self>, addr: SocketAddr) -> Endpoint {
         Endpoint::new(self, addr)
     }
 
     pub fn progress(&self) -> u32 {
         unsafe { ucp_worker_progress(self.handle) }
     }
+
+    pub fn event_fd(&self) -> i32 {
+        let mut fd = MaybeUninit::uninit();
+        let status = unsafe { ucp_worker_get_efd(self.handle, fd.as_mut_ptr()) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        unsafe { fd.assume_init() }
+    }
 }
 
 #[derive(Debug)]
-pub struct WorkerAddress<'a, 'b: 'a> {
+pub struct WorkerAddress<'a> {
     handle: *mut ucp_address_t,
     length: usize,
-    worker: &'b Worker<'a>,
+    worker: &'a Worker,
 }
 
-impl<'a, 'b: 'a> AsRef<[u8]> for WorkerAddress<'a, 'b> {
+impl<'a> AsRef<[u8]> for WorkerAddress<'a> {
     fn as_ref(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.handle as *const u8, self.length) }
     }
 }
 
-impl<'a, 'b: 'a> Drop for WorkerAddress<'a, 'b> {
+impl<'a> Drop for WorkerAddress<'a> {
     fn drop(&mut self) {
         unsafe { ucp_worker_release_address(self.worker.handle, self.handle) }
     }
 }
 
 #[derive(Debug)]
-pub struct Listener<'a, 'b: 'a> {
+pub struct Listener {
     handle: ucp_listener_h,
-    worker: &'b Worker<'a>,
+    worker: Arc<Worker>,
 }
 
-impl<'a, 'b: 'a> Listener<'a, 'b> {
-    fn new(worker: &'b Worker<'a>, addr: SocketAddr) -> Self {
+impl Listener {
+    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Self {
         unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut ::std::os::raw::c_void) {
             println!("accept");
         }
@@ -195,7 +203,7 @@ impl<'a, 'b: 'a> Listener<'a, 'b> {
         assert_eq!(status, ucs_status_t::UCS_OK);
         Listener {
             handle: unsafe { handle.assume_init() },
-            worker,
+            worker: worker.clone(),
         }
     }
 
@@ -213,20 +221,20 @@ impl<'a, 'b: 'a> Listener<'a, 'b> {
     }
 }
 
-impl<'a, 'b: 'a> Drop for Listener<'a, 'b> {
+impl Drop for Listener {
     fn drop(&mut self) {
         unsafe { ucp_listener_destroy(self.handle) }
     }
 }
 
 #[derive(Debug)]
-pub struct Endpoint<'a, 'b: 'a> {
+pub struct Endpoint {
     handle: ucp_ep_h,
-    worker: &'b Worker<'a>,
+    worker: Arc<Worker>,
 }
 
-impl<'a, 'b: 'a> Endpoint<'a, 'b> {
-    fn new(worker: &'b Worker<'a>, addr: SocketAddr) -> Self {
+impl Endpoint {
+    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Self {
         unsafe extern "C" fn err_handler(
             arg: *mut ::std::os::raw::c_void,
             ep: ucp_ep_h,
@@ -261,12 +269,12 @@ impl<'a, 'b: 'a> Endpoint<'a, 'b> {
         assert_eq!(status, ucs_status_t::UCS_OK);
         Endpoint {
             handle: unsafe { handle.assume_init() },
-            worker,
+            worker: worker.clone(),
         }
     }
 }
 
-impl<'a, 'b: 'a> Drop for Endpoint<'a, 'b> {
+impl Drop for Endpoint {
     fn drop(&mut self) {
         unsafe { ucp_ep_destroy(self.handle) }
     }
