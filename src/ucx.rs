@@ -1,8 +1,10 @@
+use std::collections::VecDeque;
 use std::ffi::CString;
-use std::mem::MaybeUninit;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::SocketAddr;
+use std::os::raw::c_void;
 use std::ptr::{null, null_mut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use ucx_sys::*;
 
 #[derive(Debug)]
@@ -40,6 +42,9 @@ impl Drop for Config {
 pub struct Context {
     handle: ucp_context_h,
 }
+
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
 
 impl Context {
     pub fn new(config: &Config) -> Arc<Self> {
@@ -130,7 +135,7 @@ impl Worker {
         }
     }
 
-    pub fn create_listener(self: &Arc<Self>, addr: SocketAddr) -> Listener {
+    pub fn create_listener(self: &Arc<Self>, addr: SocketAddr) -> Arc<Listener> {
         Listener::new(self, addr)
     }
 
@@ -172,14 +177,25 @@ impl<'a> Drop for WorkerAddress<'a> {
 #[derive(Debug)]
 pub struct Listener {
     handle: ucp_listener_h,
+    incomings: Mutex<VecDeque<Endpoint>>,
     worker: Arc<Worker>,
 }
 
 impl Listener {
-    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Self {
-        unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut ::std::os::raw::c_void) {
-            println!("accept");
+    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Arc<Self> {
+        unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut c_void) {
+            let listener = ManuallyDrop::new(Arc::from_raw(arg as *const Listener));
+            let endpoint = Endpoint {
+                handle: ep,
+                worker: listener.worker.clone(),
+            };
+            listener.incomings.lock().unwrap().push_back(endpoint);
         }
+        let mut listener = Arc::new(Listener {
+            handle: unsafe { MaybeUninit::uninit().assume_init() },
+            incomings: Mutex::default(),
+            worker: worker.clone(),
+        });
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         let params = ucp_listener_params_t {
             field_mask: (ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_SOCK_ADDR
@@ -191,20 +207,17 @@ impl Listener {
             },
             accept_handler: ucp_listener_accept_handler_t {
                 cb: Some(accept_handler),
-                arg: null_mut(),
+                arg: listener.as_ref() as *const Self as _,
             },
             conn_handler: ucp_listener_conn_handler_t {
                 cb: None,
                 arg: null_mut(),
             },
         };
-        let mut handle = MaybeUninit::uninit();
-        let status = unsafe { ucp_listener_create(worker.handle, &params, handle.as_mut_ptr()) };
+        let handle = &mut Arc::get_mut(&mut listener).unwrap().handle;
+        let status = unsafe { ucp_listener_create(worker.handle, &params, handle) };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        Listener {
-            handle: unsafe { handle.assume_init() },
-            worker: worker.clone(),
-        }
+        listener
     }
 
     pub fn socket_addr(&self) -> SocketAddr {
@@ -218,6 +231,10 @@ impl Listener {
             os_socketaddr::OsSocketAddr::from_raw_parts(&attr.sockaddr as *const _ as _, 6)
         };
         sockaddr.into_addr().unwrap()
+    }
+
+    pub fn accept(&self) -> Option<Endpoint> {
+        self.incomings.lock().unwrap().pop_front()
     }
 }
 
@@ -294,14 +311,16 @@ mod tests {
         let context = Context::new(&config);
         let worker1 = context.create_worker();
         let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
-        println!("worker address = {:?}", worker1.address().as_ref());
-        println!("listener sockaddr = {:?}", listener.socket_addr());
+        let listen_port = listener.socket_addr().port();
 
-        let worker2 = context.create_worker();
-        let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        addr.set_port(listener.socket_addr().port());
-        let endpoint = worker2.create_endpoint(addr);
+        std::thread::spawn(move || {
+            let worker2 = context.create_worker();
+            let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+            addr.set_port(listen_port);
+            let endpoint = worker2.create_endpoint(addr);
+        });
 
-        worker1.progress();
+        while worker1.progress() == 0 {}
+        let endpoint = listener.accept().unwrap();
     }
 }
