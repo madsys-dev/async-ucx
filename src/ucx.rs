@@ -1,10 +1,16 @@
+use futures::task::AtomicWaker;
+use mio::event::Evented;
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::future::Future;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::SocketAddr;
 use std::os::raw::c_void;
+use std::os::unix::io::AsRawFd;
+use std::pin::Pin;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use ucx_sys::*;
 
 #[derive(Debug)]
@@ -49,11 +55,15 @@ unsafe impl Sync for Context {}
 impl Context {
     pub fn new(config: &Config) -> Arc<Self> {
         let params = ucp_params_t {
-            field_mask: ucp_params_field::UCP_PARAM_FIELD_FEATURES.0 as u64,
+            field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
+                | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
+                | ucp_params_field::UCP_PARAM_FIELD_REQUEST_INIT
+                | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP)
+                .0 as u64,
             features: (ucp_feature::UCP_FEATURE_STREAM | ucp_feature::UCP_FEATURE_WAKEUP).0 as u64,
-            request_size: 0,
-            request_init: None,
-            request_cleanup: None,
+            request_size: std::mem::size_of::<Request>() as u64,
+            request_init: Some(Request::init),
+            request_cleanup: Some(Request::cleanup),
             tag_sender_mask: 0,
             mt_workers_shared: 0,
             estimated_num_eps: 0,
@@ -91,6 +101,9 @@ pub struct Worker {
     handle: ucp_worker_h,
     context: Arc<Context>,
 }
+
+unsafe impl Send for Worker {}
+unsafe impl Sync for Worker {}
 
 impl Drop for Worker {
     fn drop(&mut self) {
@@ -152,6 +165,12 @@ impl Worker {
         let status = unsafe { ucp_worker_get_efd(self.handle, fd.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         unsafe { fd.assume_init() }
+    }
+}
+
+impl AsRawFd for Worker {
+    fn as_raw_fd(&self) -> i32 {
+        self.event_fd()
     }
 }
 
@@ -289,11 +308,143 @@ impl Endpoint {
             worker: worker.clone(),
         }
     }
+
+    pub fn print_to_stderr(&self) {
+        unsafe { ucp_ep_print_info(self.handle, stderr) };
+    }
+
+    pub async fn stream_send(&self, buf: &[u8]) {
+        unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
+            let request = &mut *(request as *mut Request);
+            request.waker.wake();
+        }
+        let status = unsafe {
+            ucp_stream_send_nb(
+                self.handle,
+                buf.as_ptr() as _,
+                buf.len() as _,
+                ucp_dt_make_contig(1),
+                Some(callback),
+                0,
+            )
+        };
+        if status.is_null() {
+            return;
+        } else if UCS_PTR_IS_PTR(status) {
+            RequestHandle::from(status).await;
+        } else {
+            panic!("failed to send stream: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
+    }
+
+    pub async fn stream_recv(&self, buf: &mut [u8]) -> usize {
+        unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t, length: u64) {
+            let request = &mut *(request as *mut Request);
+            request.length = length;
+            request.waker.wake();
+        }
+        let mut length = MaybeUninit::uninit();
+        let status = unsafe {
+            ucp_stream_recv_nb(
+                self.handle,
+                buf.as_mut_ptr() as _,
+                buf.len() as _,
+                ucp_dt_make_contig(1),
+                Some(callback),
+                length.as_mut_ptr(),
+                0,
+            )
+        };
+        if status.is_null() {
+            return unsafe { length.assume_init() } as usize;
+        } else if UCS_PTR_IS_PTR(status) {
+            return RequestHandle::from(status).await as usize;
+        } else {
+            panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
+    }
 }
 
 impl Drop for Endpoint {
     fn drop(&mut self) {
         unsafe { ucp_ep_destroy(self.handle) }
+    }
+}
+
+/// Our defined request structure stored at `ucs_status_ptr_t`.
+///
+/// To enable this, set the following fields in `ucp_params_t` when initializing
+/// UCP context:
+/// ```no_run
+/// ucp_params_t {
+///     request_size: std::mem::size_of::<Request>() as u64,
+///     request_init: Some(Request::init),
+///     request_cleanup: Some(Request::cleanup),
+/// }
+/// ```
+#[derive(Default)]
+struct Request {
+    waker: AtomicWaker,
+    length: u64,
+}
+
+impl Request {
+    /// Initialize request.
+    ///
+    /// This function will be called only on the very first time a request memory
+    /// is initialized, and may not be called again if a request is reused.
+    unsafe extern "C" fn init(request: *mut c_void) {
+        (request as *mut Self).write(Request::default());
+    }
+
+    /// Final cleanup of the memory associated with the request.
+    ///
+    /// This routine may not be called every time a request is released.
+    unsafe extern "C" fn cleanup(request: *mut c_void) {
+        std::ptr::drop_in_place(request as *mut Self)
+    }
+}
+
+/// A handle to the request returned from async IO functions.
+struct RequestHandle {
+    inner: *mut Request,
+}
+
+impl RequestHandle {
+    fn from(status_ptr: ucs_status_ptr_t) -> Self {
+        assert!(UCS_PTR_IS_PTR(status_ptr));
+        RequestHandle {
+            inner: status_ptr as _,
+        }
+    }
+
+    fn check_status(&self) -> ucs_status_t {
+        unsafe { ucp_request_check_status(self.inner as _) }
+    }
+
+    fn is_completed(&self) -> bool {
+        self.check_status() != ucs_status_t::UCS_INPROGRESS
+    }
+}
+
+impl Future for RequestHandle {
+    type Output = u64;
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
+        let request = unsafe { &mut *(self.inner as *mut Request) };
+        if self.is_completed() {
+            return Poll::Ready(request.length);
+        }
+        request.waker.register(cx.waker());
+        if self.is_completed() {
+            return Poll::Ready(request.length);
+        }
+        Poll::Pending
+    }
+}
+
+impl Drop for RequestHandle {
+    fn drop(&mut self) {
+        unsafe { ucp_request_free(self.inner as _) }
     }
 }
 
