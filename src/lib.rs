@@ -59,7 +59,7 @@ impl AsyncRead for UcpStream {
             .read_future
             .take()
             .unwrap_or_else(|| self.endpoint.stream_recv(buf));
-        let result = Pin::new(&mut future).poll(cx).map(|len| Ok(len));
+        let result = Pin::new(&mut future).poll(cx).map(Ok);
         if result.is_pending() {
             self.read_future = Some(future);
         }
@@ -83,7 +83,7 @@ impl AsyncWrite for UcpStream {
             .write_future
             .take()
             .unwrap_or_else(|| self.endpoint.stream_send(buf));
-        let result = Pin::new(&mut future).poll(cx).map(|len| Ok(len));
+        let result = Pin::new(&mut future).poll(cx).map(Ok);
         if result.is_pending() {
             self.write_future = Some(future);
         }

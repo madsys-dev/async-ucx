@@ -32,7 +32,7 @@ pub fn create_worker() -> Arc<Worker> {
 
 lazy_static! {
     /// Global default UCP context.
-    static ref UCP_CONTEXT: Arc<Context> = Context::new(&Config::new());
+    static ref UCP_CONTEXT: Arc<Context> = Context::new(&Config::default());
 }
 
 impl Evented for Worker {

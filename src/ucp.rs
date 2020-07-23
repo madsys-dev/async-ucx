@@ -21,8 +21,8 @@ pub struct Config {
     handle: *mut ucp_config_t,
 }
 
-impl Config {
-    pub fn new() -> Self {
+impl Default for Config {
+    fn default() -> Self {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_config_read(null(), null(), handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
@@ -30,7 +30,9 @@ impl Config {
             handle: unsafe { handle.assume_init() },
         }
     }
+}
 
+impl Config {
     pub fn print_to_stderr(&self) {
         let flags = ucs_config_print_flags_t::UCS_CONFIG_PRINT_CONFIG
             | ucs_config_print_flags_t::UCS_CONFIG_PRINT_DOC
@@ -238,6 +240,7 @@ impl Listener {
                 waker.wake();
             }
         }
+        #[allow(clippy::uninit_assumed_init)]
         let mut listener = Arc::new(Listener {
             handle: unsafe { MaybeUninit::uninit().assume_init() },
             incomings: Mutex::default(),
@@ -268,6 +271,7 @@ impl Listener {
     }
 
     pub fn socket_addr(&self) -> SocketAddr {
+        #[allow(clippy::uninit_assumed_init)]
         let mut attr = ucp_listener_attr_t {
             field_mask: ucp_listener_attr_field::UCP_LISTENER_ATTR_FIELD_SOCKADDR.0 as u64,
             sockaddr: unsafe { MaybeUninit::uninit().assume_init() },
@@ -529,7 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn new() {
-        let config = Config::new();
+        let config = Config::default();
         let context = Context::new(&config);
         let worker1 = context.create_worker();
         let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
