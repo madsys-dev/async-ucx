@@ -226,6 +226,7 @@ struct Queue {
 impl Listener {
     fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Arc<Self> {
         unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut c_void) {
+            trace!("accept endpoint={:?}", ep);
             let listener = ManuallyDrop::new(Arc::from_raw(arg as *const Listener));
             let endpoint = Endpoint {
                 handle: ep,
@@ -233,8 +234,7 @@ impl Listener {
             };
             let mut incomings = listener.incomings.lock().unwrap();
             incomings.items.push_back(endpoint);
-            // wakeup one
-            if let Some(waker) = incomings.wakers.pop() {
+            for waker in incomings.wakers.drain(..) {
                 waker.wake();
             }
         }
@@ -275,7 +275,7 @@ impl Listener {
         let status = unsafe { ucp_listener_query(self.handle, &mut attr) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         let sockaddr = unsafe {
-            os_socketaddr::OsSocketAddr::from_raw_parts(&attr.sockaddr as *const _ as _, 6)
+            os_socketaddr::OsSocketAddr::from_raw_parts(&attr.sockaddr as *const _ as _, 8)
         };
         sockaddr.into_addr().unwrap()
     }
@@ -306,6 +306,8 @@ pub struct Endpoint {
     worker: Arc<Worker>,
 }
 
+unsafe impl Send for Endpoint {}
+
 impl Endpoint {
     fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Self {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
@@ -332,8 +334,10 @@ impl Endpoint {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
+        let handle = unsafe { handle.assume_init() };
+        trace!("create endpoint={:?}", handle);
         Endpoint {
-            handle: unsafe { handle.assume_init() },
+            handle,
             worker: worker.clone(),
         }
     }
@@ -343,7 +347,13 @@ impl Endpoint {
     }
 
     pub fn stream_send(&self, buf: &[u8]) -> RequestHandle {
-        unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
+        trace!("stream_send: endpoint={:?} len={}", self.handle, buf.len());
+        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
+            trace!(
+                "stream_send: complete. req={:?}, status={:?}",
+                request,
+                status
+            );
             let request = &mut *(request as *mut Request);
             request.waker.wake();
         }
@@ -358,18 +368,26 @@ impl Endpoint {
             )
         };
         if status.is_null() {
+            trace!("stream_send: complete");
             RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status)
+            RequestHandle::from(status, buf.len())
         } else {
             panic!("failed to send stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
     }
 
     pub fn stream_recv(&self, buf: &mut [u8]) -> RequestHandle {
-        unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t, length: u64) {
+        trace!("stream_recv: endpoint={:?} len={}", self.handle, buf.len());
+        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t, length: u64) {
+            trace!(
+                "stream_recv: complete. req={:?}, status={:?}, len={}",
+                request,
+                status,
+                length
+            );
             let request = &mut *(request as *mut Request);
-            request.length = length;
+            request.length = length as usize;
             request.waker.wake();
         }
         let mut length = MaybeUninit::uninit();
@@ -385,9 +403,11 @@ impl Endpoint {
             )
         };
         if status.is_null() {
-            RequestHandle::Ready(unsafe { length.assume_init() } as usize)
+            let length = unsafe { length.assume_init() } as usize;
+            trace!("stream_recv: complete. len={}", length);
+            RequestHandle::Ready(length)
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status)
+            RequestHandle::from(status, 0)
         } else {
             panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -396,6 +416,7 @@ impl Endpoint {
 
 impl Drop for Endpoint {
     fn drop(&mut self) {
+        trace!("destroy endpoint={:?}", self.handle);
         unsafe { ucp_ep_destroy(self.handle) }
     }
 }
@@ -414,7 +435,7 @@ impl Drop for Endpoint {
 #[derive(Default)]
 pub struct Request {
     waker: AtomicWaker,
-    length: u64,
+    length: usize,
 }
 
 impl Request {
@@ -440,10 +461,14 @@ pub enum RequestHandle {
     Pending(NonNull<Request>),
 }
 
+unsafe impl Send for RequestHandle {}
+
 impl RequestHandle {
-    fn from(status_ptr: ucs_status_ptr_t) -> Self {
+    fn from(status_ptr: ucs_status_ptr_t, len: usize) -> Self {
         assert!(UCS_PTR_IS_PTR(status_ptr));
-        RequestHandle::Pending(NonNull::new(status_ptr as _).unwrap())
+        let mut ptr = NonNull::new(status_ptr as *mut Request).unwrap();
+        unsafe { ptr.as_mut() }.length = len;
+        RequestHandle::Pending(ptr)
     }
 
     fn check_status(&self) -> ucs_status_t {
@@ -460,7 +485,7 @@ impl RequestHandle {
     fn len(&self) -> usize {
         match self {
             RequestHandle::Ready(len) => *len,
-            RequestHandle::Pending(ptr) => unsafe { ptr.as_ref() }.length as usize,
+            RequestHandle::Pending(ptr) => unsafe { ptr.as_ref() }.length,
         }
     }
 
@@ -488,6 +513,7 @@ impl Future for RequestHandle {
 impl Drop for RequestHandle {
     fn drop(&mut self) {
         if let RequestHandle::Pending(ptr) = self {
+            trace!("request free: {:?}", ptr.as_ptr());
             unsafe { ucp_request_free(ptr.as_ptr() as _) };
         }
     }

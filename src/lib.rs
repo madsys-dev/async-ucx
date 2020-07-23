@@ -1,5 +1,9 @@
 #![deny(warnings)]
 
+#[macro_use]
+extern crate log;
+
+use futures::pin_mut;
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
@@ -7,6 +11,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::Result;
 use tokio::prelude::*;
+use tokio::stream::Stream;
 
 mod reactor;
 pub mod ucp;
@@ -57,12 +62,17 @@ impl AsyncRead for UcpStream {
         if result.is_pending() {
             self.read_future = Some(future);
         }
+        if let Poll::Ready(Ok(len)) = result {
+            trace!("data={:?}", &buf[..len]);
+        }
+        trace!("poll_read => {:?}", result);
         result
     }
 }
 
 impl AsyncWrite for UcpStream {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize>> {
+        trace!("data={:?}", buf);
         let mut future = self
             .write_future
             .take()
@@ -71,11 +81,13 @@ impl AsyncWrite for UcpStream {
         if result.is_pending() {
             self.write_future = Some(future);
         }
+        trace!("poll_write => {:?}", result);
         result
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Result<()>> {
-        todo!()
+        trace!("poll_flush");
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Result<()>> {
@@ -103,5 +115,17 @@ impl UcpListener {
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.listener.socket_addr())
+    }
+}
+
+impl Stream for UcpListener {
+    type Item = Result<UcpStream>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let future = self.listener.accept();
+        pin_mut!(future);
+        future
+            .poll(cx)
+            .map(|endpoint| Some(Ok(UcpStream::from(endpoint))))
     }
 }

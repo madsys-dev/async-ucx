@@ -13,6 +13,10 @@ os_socketaddr = "0.1"
 mio = "0.6"
 futures = "0.3"
 lazy_static = "1.4"
+log = "0.4"
+
+[dev-dependencies]
+env_logger = "0.7"
 
 [build-dependencies]
 bindgen = "0.54"
