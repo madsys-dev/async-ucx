@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::os::raw::c_void;
 use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
+use std::ptr::NonNull;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
@@ -341,7 +342,7 @@ impl Endpoint {
         unsafe { ucp_ep_print_info(self.handle, stderr) };
     }
 
-    pub async fn stream_send(&self, buf: &[u8]) {
+    pub fn stream_send(&self, buf: &[u8]) -> RequestHandle {
         unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
             let request = &mut *(request as *mut Request);
             request.waker.wake();
@@ -357,15 +358,15 @@ impl Endpoint {
             )
         };
         if status.is_null() {
-            return;
+            RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status).await;
+            RequestHandle::from(status)
         } else {
             panic!("failed to send stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
     }
 
-    pub async fn stream_recv(&self, buf: &mut [u8]) -> usize {
+    pub fn stream_recv(&self, buf: &mut [u8]) -> RequestHandle {
         unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t, length: u64) {
             let request = &mut *(request as *mut Request);
             request.length = length;
@@ -384,9 +385,9 @@ impl Endpoint {
             )
         };
         if status.is_null() {
-            return unsafe { length.assume_init() } as usize;
+            RequestHandle::Ready(unsafe { length.assume_init() } as usize)
         } else if UCS_PTR_IS_PTR(status) {
-            return RequestHandle::from(status).await as usize;
+            RequestHandle::from(status)
         } else {
             panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -411,7 +412,7 @@ impl Drop for Endpoint {
 /// }
 /// ```
 #[derive(Default)]
-struct Request {
+pub struct Request {
     waker: AtomicWaker,
     length: u64,
 }
@@ -434,37 +435,51 @@ impl Request {
 }
 
 /// A handle to the request returned from async IO functions.
-struct RequestHandle {
-    inner: *mut Request,
+pub enum RequestHandle {
+    Ready(usize),
+    Pending(NonNull<Request>),
 }
 
 impl RequestHandle {
     fn from(status_ptr: ucs_status_ptr_t) -> Self {
         assert!(UCS_PTR_IS_PTR(status_ptr));
-        RequestHandle {
-            inner: status_ptr as _,
-        }
+        RequestHandle::Pending(NonNull::new(status_ptr as _).unwrap())
     }
 
     fn check_status(&self) -> ucs_status_t {
-        unsafe { ucp_request_check_status(self.inner as _) }
+        match self {
+            RequestHandle::Ready(_) => ucs_status_t::UCS_OK,
+            RequestHandle::Pending(ptr) => unsafe { ucp_request_check_status(ptr.as_ptr() as _) },
+        }
     }
 
     fn is_completed(&self) -> bool {
         self.check_status() != ucs_status_t::UCS_INPROGRESS
     }
+
+    fn len(&self) -> usize {
+        match self {
+            RequestHandle::Ready(len) => *len,
+            RequestHandle::Pending(ptr) => unsafe { ptr.as_ref() }.length as usize,
+        }
+    }
+
+    fn register_waker(&mut self, waker: &Waker) {
+        if let RequestHandle::Pending(ptr) = self {
+            unsafe { ptr.as_mut() }.waker.register(waker);
+        }
+    }
 }
 
 impl Future for RequestHandle {
-    type Output = u64;
-    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
-        let request = unsafe { &mut *(self.inner as *mut Request) };
+    type Output = usize;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
         if self.is_completed() {
-            return Poll::Ready(request.length);
+            return Poll::Ready(self.len());
         }
-        request.waker.register(cx.waker());
+        self.register_waker(cx.waker());
         if self.is_completed() {
-            return Poll::Ready(request.length);
+            return Poll::Ready(self.len());
         }
         Poll::Pending
     }
@@ -472,7 +487,9 @@ impl Future for RequestHandle {
 
 impl Drop for RequestHandle {
     fn drop(&mut self) {
-        unsafe { ucp_request_free(self.inner as _) }
+        if let RequestHandle::Pending(ptr) = self {
+            unsafe { ucp_request_free(ptr.as_ptr() as _) };
+        }
     }
 }
 
