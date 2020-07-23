@@ -5,6 +5,7 @@ extern crate log;
 
 use futures::pin_mut;
 use std::future::Future;
+use std::mem::MaybeUninit;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -67,6 +68,11 @@ impl AsyncRead for UcpStream {
         }
         trace!("poll_read => {:?}", result);
         result
+    }
+
+    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [MaybeUninit<u8>]) -> bool {
+        // override default function, don't zero the buffer.
+        true
     }
 }
 
