@@ -6,13 +6,13 @@ use tokio_ucx::*;
 async fn main() -> Result<()> {
     if let Some(server_addr) = std::env::args().nth(1) {
         println!("client: connect to {:?}", server_addr);
-        let mut stream = UcpStream::connect(server_addr.parse().unwrap()).await?;
+        let mut stream = UcpStream::connect(server_addr).await?;
         let msg = "Hello!";
         println!("send: {:?}", msg);
         stream.write(msg.as_bytes()).await?;
     } else {
         println!("server");
-        let listener = UcpListener::bind("0.0.0.0:10000".parse().unwrap()).await?;
+        let listener = UcpListener::bind("0.0.0.0:10000").await?;
         println!("listening on {}", listener.local_addr()?);
         let mut stream = listener.accept().await?;
         println!("accept");

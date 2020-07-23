@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -19,8 +19,9 @@ pub struct UcpStream {
 }
 
 impl UcpStream {
-    pub async fn connect(addr: SocketAddr) -> Result<UcpStream> {
+    pub async fn connect(addr: impl ToSocketAddrs) -> Result<UcpStream> {
         let worker = self::reactor::create_worker();
+        let addr = addr.to_socket_addrs()?.next().unwrap();
         let endpoint = worker.create_endpoint(addr);
         Ok(UcpStream::from(endpoint))
     }
@@ -88,8 +89,9 @@ pub struct UcpListener {
 }
 
 impl UcpListener {
-    pub async fn bind(addr: SocketAddr) -> Result<UcpListener> {
+    pub async fn bind(addr: impl ToSocketAddrs) -> Result<UcpListener> {
         let worker = self::reactor::create_worker();
+        let addr = addr.to_socket_addrs()?.next().unwrap();
         let listener = worker.create_listener(addr);
         Ok(UcpListener { listener })
     }
