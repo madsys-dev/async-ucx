@@ -1,4 +1,4 @@
-//! Mid-level bindings for UCX.
+//! Mid-level bindings for UCP.
 
 use futures::future::poll_fn;
 use futures::task::AtomicWaker;
@@ -134,7 +134,7 @@ impl Worker {
         })
     }
 
-    fn print_to_stderr(&self) {
+    pub fn print_to_stderr(&self) {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
     }
 
@@ -517,9 +517,9 @@ mod tests {
             let worker2 = context.create_worker();
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
             addr.set_port(listen_port);
-            let endpoint = worker2.create_endpoint(addr);
+            let _endpoint = worker2.create_endpoint(addr);
         });
 
-        let endpoint = listener.accept().await;
+        let _endpoint = listener.accept().await;
     }
 }

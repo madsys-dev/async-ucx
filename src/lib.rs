@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -7,13 +9,13 @@ use tokio::io::Result;
 use tokio::prelude::*;
 
 mod reactor;
-pub mod ucx;
+pub mod ucp;
 
 /// A UCP stream between a local and a remote socket.
 pub struct UcpStream {
-    endpoint: ucx::Endpoint,
-    read_future: Option<ucx::RequestHandle>,
-    write_future: Option<ucx::RequestHandle>,
+    endpoint: ucp::Endpoint,
+    read_future: Option<ucp::RequestHandle>,
+    write_future: Option<ucp::RequestHandle>,
 }
 
 impl UcpStream {
@@ -31,7 +33,7 @@ impl UcpStream {
         todo!()
     }
 
-    fn from(endpoint: ucx::Endpoint) -> Self {
+    fn from(endpoint: ucp::Endpoint) -> Self {
         UcpStream {
             endpoint,
             read_future: None,
@@ -71,18 +73,18 @@ impl AsyncWrite for UcpStream {
         result
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Result<()>> {
         todo!()
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Result<()>> {
         todo!()
     }
 }
 
 /// A UCP server, listening for connections.
 pub struct UcpListener {
-    listener: Arc<ucx::Listener>,
+    listener: Arc<ucp::Listener>,
 }
 
 impl UcpListener {

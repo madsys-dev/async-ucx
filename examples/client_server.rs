@@ -1,4 +1,4 @@
-use tokio_ucx::ucx::*;
+use tokio_ucx::ucp::*;
 
 #[tokio::main]
 async fn main() {
