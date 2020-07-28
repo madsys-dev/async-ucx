@@ -167,12 +167,14 @@ impl Worker {
         assert_eq!(status, ucs_status_t::UCS_OK);
     }
 
-    pub fn arm(&self) {
+    /// Returns 'true' if one can wait for events (sleep mode).
+    pub fn arm(&self) -> bool {
         let status = unsafe { ucp_worker_arm(self.handle) };
-        assert!(matches!(
-            status,
-            ucs_status_t::UCS_OK | ucs_status_t::UCS_ERR_BUSY
-        ));
+        match status {
+            ucs_status_t::UCS_OK => true,
+            ucs_status_t::UCS_ERR_BUSY => false,
+            _ => panic!("{:?}", status),
+        }
     }
 
     pub fn progress(&self) -> u32 {

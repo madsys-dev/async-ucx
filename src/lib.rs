@@ -63,9 +63,6 @@ impl AsyncRead for UcpStream {
         if result.is_pending() {
             self.read_future = Some(future);
         }
-        if let Poll::Ready(Ok(len)) = result {
-            trace!("data={:?}", &buf[..len]);
-        }
         trace!("poll_read => {:?}", result);
         result
     }
@@ -78,7 +75,6 @@ impl AsyncRead for UcpStream {
 
 impl AsyncWrite for UcpStream {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize>> {
-        trace!("data={:?}", buf);
         let mut future = self
             .write_future
             .take()
