@@ -130,14 +130,29 @@ impl Worker {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_worker_create(context.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        Arc::new(Worker {
+        let worker = Arc::new(Worker {
             handle: unsafe { handle.assume_init() },
             context: context.clone(),
-        })
+        });
+        assert_eq!(
+            worker.thread_mode(),
+            ucs_thread_mode_t::UCS_THREAD_MODE_MULTI
+        );
+        worker
     }
 
     pub fn print_to_stderr(&self) {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
+    }
+
+    fn thread_mode(&self) -> ucs_thread_mode_t {
+        let mut attr = ucp_worker_attr {
+            field_mask: ucp_worker_attr_field::UCP_WORKER_ATTR_FIELD_THREAD_MODE.0 as u64,
+            ..unsafe { MaybeUninit::uninit().assume_init() }
+        };
+        let status = unsafe { ucp_worker_query(self.handle, &mut attr) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        attr.thread_mode
     }
 
     pub fn address(&self) -> WorkerAddress<'_> {
