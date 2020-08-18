@@ -17,7 +17,9 @@ use std::task::{Poll, Waker};
 use ucx_sys::*;
 
 #[path = "rma.rs"]
-pub mod rma;
+mod rma;
+
+pub use self::rma::*;
 
 #[derive(Debug)]
 pub struct Config {
