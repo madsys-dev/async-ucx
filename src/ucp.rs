@@ -16,6 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 use ucx_sys::*;
 
+#[path = "rma.rs"]
+pub mod rma;
+
 #[derive(Debug)]
 pub struct Config {
     handle: *mut ucp_config_t,
@@ -66,7 +69,10 @@ impl Context {
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP
                 | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
-            features: (ucp_feature::UCP_FEATURE_STREAM | ucp_feature::UCP_FEATURE_WAKEUP).0 as u64,
+            features: (ucp_feature::UCP_FEATURE_RMA
+                | ucp_feature::UCP_FEATURE_STREAM
+                | ucp_feature::UCP_FEATURE_WAKEUP)
+                .0 as u64,
             request_size: std::mem::size_of::<Request>() as u64,
             request_init: Some(Request::init),
             request_cleanup: Some(Request::cleanup),
@@ -201,6 +207,31 @@ impl Worker {
         let status = unsafe { ucp_worker_get_efd(self.handle, fd.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         unsafe { fd.assume_init() }
+    }
+
+    /// Installs a user defined callback to handle incoming Active Messages with a specific id.
+    pub fn set_am_handler(&self, id: u16, arg: usize) {
+        unsafe extern "C" fn callback(
+            arg: *mut c_void,
+            data: *mut c_void,
+            length: u64,
+            _reply_ep: ucp_ep_h,
+            _flags: u32,
+        ) -> ucs_status_t {
+            trace!("active_message: arg={:?}, len={:?}", arg, length);
+            let _data = std::slice::from_raw_parts(data as *const u8, length as _);
+            // TODO: release data
+            ucs_status_t::UCS_OK
+        }
+        let status =
+            unsafe { ucp_worker_set_am_handler(self.handle, id, Some(callback), arg as _, 0) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+    }
+
+    /// This routine flushes all outstanding AMO and RMA communications on the worker.
+    pub fn flush(&self) {
+        let status = unsafe { ucp_worker_flush(self.handle) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
     }
 }
 
