@@ -119,6 +119,7 @@ impl Endpoint {
             trace!("put: complete.");
             RequestHandle::Ready(0)
         } else if UCS_PTR_IS_PTR(status) {
+            self.worker.flush();
             RequestHandle::from(status, 0)
         } else {
             panic!("failed to put: {:?}", UCS_PTR_RAW_STATUS(status));
@@ -146,6 +147,7 @@ impl Endpoint {
             trace!("get: complete.");
             RequestHandle::Ready(0)
         } else if UCS_PTR_IS_PTR(status) {
+            self.worker.flush();
             RequestHandle::from(status, 0)
         } else {
             panic!("failed to get: {:?}", UCS_PTR_RAW_STATUS(status));
@@ -187,8 +189,8 @@ mod tests {
         let mut endpoint2 = worker2.create_endpoint(addr);
         let _endpoint1 = listener.accept().await;
 
-        let mut buf1: Vec<u8> = vec![0; 0x10];
-        let buf2: Vec<u8> = (0..0x10).map(|x| x as u8).collect();
+        let mut buf1: Vec<u8> = vec![0; 0x1000];
+        let mut buf2: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
 
         // register memory region
         let mem1 = MemoryHandle::register(&context1, &mut buf1);
@@ -199,13 +201,13 @@ mod tests {
         endpoint2
             .put(&buf2[..], buf1.as_mut_ptr() as u64, &rkey2)
             .await;
-        worker2.flush();
         assert_eq!(&buf1[..], &buf2[..]);
 
         // test get
-        // buf1.iter_mut().for_each(|x| *x = 0);
-        // endpoint2.get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2).await;
-        // worker2.flush();
-        // assert_eq!(&buf1[..], &buf2[..]);
+        buf1.iter_mut().for_each(|x| *x = 0);
+        endpoint2
+            .get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2)
+            .await;
+        assert_eq!(&buf1[..], &buf2[..]);
     }
 }
