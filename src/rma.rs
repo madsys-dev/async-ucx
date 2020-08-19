@@ -98,60 +98,32 @@ impl Drop for RKey {
 }
 
 impl Endpoint {
-    pub fn put(&mut self, buf: &[u8], remote_addr: u64, rkey: &RKey) -> RequestHandle {
+    pub fn put(&mut self, buf: &[u8], remote_addr: u64, rkey: &RKey) {
         trace!("put: endpoint={:?} len={}", self.handle, buf.len());
-        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
-            trace!("put: complete. req={:?}, status={:?}", request, status);
-            let request = &mut *(request as *mut Request);
-            request.waker.wake();
-        }
         let status = unsafe {
-            ucp_put_nb(
+            ucp_put(
                 self.handle,
                 buf.as_ptr() as _,
                 buf.len() as _,
                 remote_addr,
                 rkey.handle,
-                Some(callback),
             )
         };
-        if status.is_null() {
-            trace!("put: complete.");
-            RequestHandle::Ready(0)
-        } else if UCS_PTR_IS_PTR(status) {
-            self.worker.flush();
-            RequestHandle::from(status, 0)
-        } else {
-            panic!("failed to put: {:?}", UCS_PTR_RAW_STATUS(status));
-        }
+        assert!(status == ucs_status_t::UCS_OK);
     }
 
-    pub fn get(&mut self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) -> RequestHandle {
+    pub fn get(&mut self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) {
         trace!("get: endpoint={:?} len={}", self.handle, buf.len());
-        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
-            trace!("get: complete. req={:?}, status={:?}", request, status);
-            let request = &mut *(request as *mut Request);
-            request.waker.wake();
-        }
         let status = unsafe {
-            ucp_get_nb(
+            ucp_get(
                 self.handle,
                 buf.as_mut_ptr() as _,
                 buf.len() as _,
                 remote_addr,
                 rkey.handle,
-                Some(callback),
             )
         };
-        if status.is_null() {
-            trace!("get: complete.");
-            RequestHandle::Ready(0)
-        } else if UCS_PTR_IS_PTR(status) {
-            self.worker.flush();
-            RequestHandle::from(status, 0)
-        } else {
-            panic!("failed to get: {:?}", UCS_PTR_RAW_STATUS(status));
-        }
+        assert!(status == ucs_status_t::UCS_OK);
     }
 }
 
@@ -198,16 +170,12 @@ mod tests {
         let rkey2 = RKey::unpack(&endpoint2, rkey_buf.as_ref());
 
         // test put
-        endpoint2
-            .put(&buf2[..], buf1.as_mut_ptr() as u64, &rkey2)
-            .await;
+        endpoint2.put(&buf2[..], buf1.as_mut_ptr() as u64, &rkey2);
         assert_eq!(&buf1[..], &buf2[..]);
 
         // test get
         buf1.iter_mut().for_each(|x| *x = 0);
-        endpoint2
-            .get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2)
-            .await;
+        endpoint2.get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2);
         assert_eq!(&buf1[..], &buf2[..]);
     }
 }

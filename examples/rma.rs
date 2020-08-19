@@ -53,7 +53,7 @@ async fn main() {
 
         let rkey = RKey::unpack(&endpoint, &rkey_buf[..len]);
         let mut buf = vec![0; 0x1000];
-        endpoint.get(&mut buf, vaddr, &rkey).await;
+        endpoint.get(&mut buf, vaddr, &rkey);
         println!("get remote memory");
 
         let expected: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();

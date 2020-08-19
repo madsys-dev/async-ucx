@@ -466,6 +466,20 @@ impl Endpoint {
             panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
     }
+
+    /// This routine flushes all outstanding AMO and RMA communications on the endpoint.
+    pub fn flush(&self) {
+        let status = unsafe { ucp_ep_flush(self.handle) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+    }
+
+    /// This routine flushes all outstanding AMO and RMA communications on the endpoint.
+    pub fn flush_begin(&self) {
+        unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
+            ucp_request_free(request);
+        }
+        unsafe { ucp_ep_flush_nb(self.handle, 0, Some(callback)) };
+    }
 }
 
 impl Drop for Endpoint {
