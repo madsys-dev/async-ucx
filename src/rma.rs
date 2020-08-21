@@ -75,6 +75,7 @@ pub struct RKey {
 }
 
 unsafe impl Send for RKey {}
+unsafe impl Sync for RKey {}
 
 impl RKey {
     pub fn unpack(endpoint: &Endpoint, rkey_buffer: &[u8]) -> Self {
@@ -100,32 +101,58 @@ impl Drop for RKey {
 }
 
 impl Endpoint {
-    pub fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) {
+    pub fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) -> RequestHandle {
         trace!("put: endpoint={:?} len={}", self.handle, buf.len());
+        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
+            trace!("put: complete. req={:?}, status={:?}", request, status);
+            let request = &mut *(request as *mut Request);
+            request.waker.wake();
+        }
         let status = unsafe {
-            ucp_put(
+            ucp_put_nb(
                 self.handle,
                 buf.as_ptr() as _,
                 buf.len() as _,
                 remote_addr,
                 rkey.handle,
+                Some(callback),
             )
         };
-        assert!(status == ucs_status_t::UCS_OK);
+        if status.is_null() {
+            trace!("put: complete.");
+            RequestHandle::Ready(0)
+        } else if UCS_PTR_IS_PTR(status) {
+            RequestHandle::from(status, 0)
+        } else {
+            panic!("failed to put: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
     }
 
-    pub fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) {
+    pub fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) -> RequestHandle {
         trace!("get: endpoint={:?} len={}", self.handle, buf.len());
+        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
+            trace!("get: complete. req={:?}, status={:?}", request, status);
+            let request = &mut *(request as *mut Request);
+            request.waker.wake();
+        }
         let status = unsafe {
-            ucp_get(
+            ucp_get_nb(
                 self.handle,
                 buf.as_mut_ptr() as _,
                 buf.len() as _,
                 remote_addr,
                 rkey.handle,
+                Some(callback),
             )
         };
-        assert!(status == ucs_status_t::UCS_OK);
+        if status.is_null() {
+            trace!("get: complete.");
+            RequestHandle::Ready(0)
+        } else if UCS_PTR_IS_PTR(status) {
+            RequestHandle::from(status, 0)
+        } else {
+            panic!("failed to get: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
     }
 }
 
@@ -143,14 +170,12 @@ mod tests {
         std::thread::spawn({
             let worker1 = worker1.clone();
             move || loop {
-                worker1.wait();
                 worker1.progress();
             }
         });
         std::thread::spawn({
             let worker2 = worker2.clone();
             move || loop {
-                worker2.wait();
                 worker2.progress();
             }
         });
@@ -160,7 +185,7 @@ mod tests {
         let listen_port = listener.socket_addr().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let mut endpoint2 = worker2.create_endpoint(addr);
+        let endpoint2 = worker2.create_endpoint(addr);
         let _endpoint1 = listener.accept().await;
 
         let mut buf1: Vec<u8> = vec![0; 0x1000];
@@ -172,12 +197,16 @@ mod tests {
         let rkey2 = RKey::unpack(&endpoint2, rkey_buf.as_ref());
 
         // test put
-        endpoint2.put(&buf2[..], buf1.as_mut_ptr() as u64, &rkey2);
+        endpoint2
+            .put(&buf2[..], buf1.as_mut_ptr() as u64, &rkey2)
+            .await;
         assert_eq!(&buf1[..], &buf2[..]);
 
         // test get
         buf1.iter_mut().for_each(|x| *x = 0);
-        endpoint2.get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2);
+        endpoint2
+            .get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2)
+            .await;
         assert_eq!(&buf1[..], &buf2[..]);
     }
 }
