@@ -74,6 +74,8 @@ pub struct RKey {
     handle: ucp_rkey_h,
 }
 
+unsafe impl Send for RKey {}
+
 impl RKey {
     pub fn unpack(endpoint: &Endpoint, rkey_buffer: &[u8]) -> Self {
         let mut handle = MaybeUninit::uninit();
@@ -98,7 +100,7 @@ impl Drop for RKey {
 }
 
 impl Endpoint {
-    pub fn put(&mut self, buf: &[u8], remote_addr: u64, rkey: &RKey) {
+    pub fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) {
         trace!("put: endpoint={:?} len={}", self.handle, buf.len());
         let status = unsafe {
             ucp_put(
@@ -112,7 +114,7 @@ impl Endpoint {
         assert!(status == ucs_status_t::UCS_OK);
     }
 
-    pub fn get(&mut self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) {
+    pub fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) {
         trace!("get: endpoint={:?} len={}", self.handle, buf.len());
         let status = unsafe {
             ucp_get(

@@ -17,9 +17,11 @@ use tokio::stream::Stream;
 mod reactor;
 pub mod ucp;
 
+pub use self::reactor::UCP_CONTEXT;
+
 /// A UCP stream between a local and a remote socket.
 pub struct UcpStream {
-    endpoint: ucp::Endpoint,
+    endpoint: Arc<ucp::Endpoint>,
     read_future: Option<ucp::RequestHandle>,
     write_future: Option<ucp::RequestHandle>,
 }
@@ -40,7 +42,11 @@ impl UcpStream {
         todo!()
     }
 
-    fn from(endpoint: ucp::Endpoint) -> Self {
+    pub fn endpoint(&self) -> Arc<ucp::Endpoint> {
+        self.endpoint.clone()
+    }
+
+    fn from(endpoint: Arc<ucp::Endpoint>) -> Self {
         UcpStream {
             endpoint,
             read_future: None,

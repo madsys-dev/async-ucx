@@ -181,7 +181,7 @@ impl Worker {
         Listener::new(self, addr)
     }
 
-    pub fn create_endpoint(self: &Arc<Self>, addr: SocketAddr) -> Endpoint {
+    pub fn create_endpoint(self: &Arc<Self>, addr: SocketAddr) -> Arc<Endpoint> {
         Endpoint::new(self, addr)
     }
 
@@ -271,7 +271,7 @@ pub struct Listener {
 
 #[derive(Debug, Default)]
 struct Queue {
-    items: VecDeque<Endpoint>,
+    items: VecDeque<Arc<Endpoint>>,
     wakers: Vec<Waker>,
 }
 
@@ -280,10 +280,10 @@ impl Listener {
         unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut c_void) {
             trace!("accept endpoint={:?}", ep);
             let listener = ManuallyDrop::new(Arc::from_raw(arg as *const Listener));
-            let endpoint = Endpoint {
+            let endpoint = Arc::new(Endpoint {
                 handle: ep,
                 worker: listener.worker.clone(),
-            };
+            });
             let mut incomings = listener.incomings.lock().unwrap();
             incomings.items.push_back(endpoint);
             for waker in incomings.wakers.drain(..) {
@@ -334,7 +334,7 @@ impl Listener {
         sockaddr.into_addr().unwrap()
     }
 
-    pub async fn accept(&self) -> Endpoint {
+    pub async fn accept(&self) -> Arc<Endpoint> {
         poll_fn(|cx| {
             let mut incomings = self.incomings.lock().unwrap();
             if let Some(endpoint) = incomings.items.pop_front() {
@@ -361,9 +361,10 @@ pub struct Endpoint {
 }
 
 unsafe impl Send for Endpoint {}
+unsafe impl Sync for Endpoint {}
 
 impl Endpoint {
-    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Self {
+    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Arc<Self> {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
@@ -390,10 +391,10 @@ impl Endpoint {
         assert_eq!(status, ucs_status_t::UCS_OK);
         let handle = unsafe { handle.assume_init() };
         trace!("create endpoint={:?}", handle);
-        Endpoint {
+        Arc::new(Endpoint {
             handle,
             worker: worker.clone(),
-        }
+        })
     }
 
     pub fn print_to_stderr(&self) {
