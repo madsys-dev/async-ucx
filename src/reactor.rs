@@ -1,37 +1,37 @@
 use crate::ucp::*;
-use futures::future::poll_fn;
+// use futures::future::poll_fn;
 use lazy_static::lazy_static;
 use mio::{event::Evented, unix::EventedFd, Poll, PollOpt, Ready, Token};
 use std::io::Result;
 use std::sync::Arc;
-use tokio::io::Registration;
+// use tokio::io::Registration;
 
 /// Create a worker from default context, and register it to the reactor.
 pub fn create_worker() -> Arc<Worker> {
     let worker = UCP_CONTEXT.create_worker();
     let ret = worker.clone();
     // spawn a future to make progress on the worker
-    // std::thread::spawn(move || {
-    //     while Arc::strong_count(&worker) > 1 {
-    //         worker.wait();
-    //         worker.progress();
-    //     }
-    // });
     tokio::spawn(async move {
-        let mut registration = Registration::new(&worker).unwrap();
         while Arc::strong_count(&worker) > 1 {
-            // ref: UCX doc: 6.5.2.4 ucp_worker_arm()
-            // progress until no more events
             while worker.progress() != 0 {}
-            if worker.arm() {
-                // 'UCP does not generate POLLOUT-like events'
-                poll_fn(|cx| registration.poll_read_ready(cx))
-                    .await
-                    .unwrap();
-            }
+            tokio::task::yield_now().await;
         }
-        registration.deregister(&worker).unwrap();
     });
+    // tokio::spawn(async move {
+    //     let mut registration = Registration::new(&worker).unwrap();
+    //     while Arc::strong_count(&worker) > 1 {
+    //         // ref: UCX doc: 6.5.2.4 ucp_worker_arm()
+    //         // progress until no more events
+    //         while worker.progress() != 0 {}
+    //         if worker.arm() {
+    //             // 'UCP does not generate POLLOUT-like events'
+    //             poll_fn(|cx| registration.poll_read_ready(cx))
+    //                 .await
+    //                 .unwrap();
+    //         }
+    //     }
+    //     registration.deregister(&worker).unwrap();
+    // });
     ret
 }
 
