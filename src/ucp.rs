@@ -154,12 +154,12 @@ impl Worker {
     }
 
     fn thread_mode(&self) -> ucs_thread_mode_t {
-        let mut attr = ucp_worker_attr {
-            field_mask: ucp_worker_attr_field::UCP_WORKER_ATTR_FIELD_THREAD_MODE.0 as u64,
-            ..unsafe { MaybeUninit::uninit().assume_init() }
-        };
-        let status = unsafe { ucp_worker_query(self.handle, &mut attr) };
+        let mut attr = MaybeUninit::<ucp_worker_attr>::uninit();
+        unsafe { &mut *attr.as_mut_ptr() }.field_mask =
+            ucp_worker_attr_field::UCP_WORKER_ATTR_FIELD_THREAD_MODE.0 as u64;
+        let status = unsafe { ucp_worker_query(self.handle, attr.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
+        let attr = unsafe { attr.assume_init() };
         attr.thread_mode
     }
 
