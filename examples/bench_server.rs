@@ -1,6 +1,5 @@
 use std::io::Result;
 use std::sync::atomic::*;
-use tokio::prelude::*;
 use tokio_ucx::ucp::*;
 
 #[tokio::main(core_threads = 1)]
@@ -34,7 +33,7 @@ async fn main() -> Result<()> {
             let tag = i as u64 + 200;
             let mut buf = vec![0; 50000];
             loop {
-                ep.tag_recv(tag, &mut buf).await;
+                ep.worker().tag_recv(tag, &mut buf).await;
                 ep.tag_send(tag, &[0]).await;
                 COUNT.fetch_add(1, Ordering::SeqCst);
             }
