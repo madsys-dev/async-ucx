@@ -72,6 +72,7 @@ impl Context {
                 | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
             features: (ucp_feature::UCP_FEATURE_RMA
+                | ucp_feature::UCP_FEATURE_TAG
                 | ucp_feature::UCP_FEATURE_STREAM
                 | ucp_feature::UCP_FEATURE_WAKEUP)
                 .0 as u64,
@@ -465,6 +466,72 @@ impl Endpoint {
             RequestHandle::from(status, 0)
         } else {
             panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
+    }
+
+    pub fn tag_send(&self, tag: u64, buf: &[u8]) -> RequestHandle {
+        trace!("tag_send: endpoint={:?} len={}", self.handle, buf.len());
+        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
+            trace!("tag_send: complete. req={:?}, status={:?}", request, status);
+            let request = &mut *(request as *mut Request);
+            request.waker.wake();
+        }
+        let status = unsafe {
+            ucp_tag_send_nb(
+                self.handle,
+                buf.as_ptr() as _,
+                buf.len() as _,
+                ucp_dt_make_contig(1),
+                tag,
+                Some(callback),
+            )
+        };
+        if status.is_null() {
+            trace!("tag_send: complete");
+            RequestHandle::Ready(buf.len())
+        } else if UCS_PTR_IS_PTR(status) {
+            RequestHandle::from(status, buf.len())
+        } else {
+            panic!("failed to send tag: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
+    }
+
+    pub fn tag_recv(&self, tag: u64, buf: &mut [u8]) -> RequestHandle {
+        trace!("tag_recv: endpoint={:?} len={}", self.handle, buf.len());
+        unsafe extern "C" fn callback(
+            request: *mut c_void,
+            status: ucs_status_t,
+            info: *mut ucp_tag_recv_info,
+        ) {
+            let length = (*info).length;
+            trace!(
+                "tag_recv: complete. req={:?}, status={:?}, len={}",
+                request,
+                status,
+                length
+            );
+            let request = &mut *(request as *mut Request);
+            request.length = length as usize;
+            request.waker.wake();
+        }
+        let status = unsafe {
+            ucp_tag_recv_nb(
+                self.worker.handle,
+                buf.as_mut_ptr() as _,
+                buf.len() as _,
+                ucp_dt_make_contig(1),
+                tag,
+                u64::max_value(),
+                Some(callback),
+            )
+        };
+        if status.is_null() {
+            trace!("tag_recv: complete.");
+            RequestHandle::Ready(0)
+        } else if UCS_PTR_IS_PTR(status) {
+            RequestHandle::from(status, 0)
+        } else {
+            panic!("failed to recv tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
     }
 
