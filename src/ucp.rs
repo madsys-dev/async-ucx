@@ -11,7 +11,6 @@ use std::net::SocketAddr;
 use std::os::raw::c_void;
 use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
-use std::ptr::NonNull;
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
@@ -253,7 +252,6 @@ impl Worker {
                 length
             );
             let request = &mut *(request as *mut Request);
-            request.length = length as usize;
             request.waker.wake();
         }
         let status = unsafe {
@@ -268,7 +266,7 @@ impl Worker {
             )
         };
         if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, 0)
+            RequestHandle::Tag(status)
         } else {
             panic!("failed to recv tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -293,7 +291,6 @@ impl Worker {
                 length
             );
             let request = &mut *(request as *mut Request);
-            request.length = length as usize;
             request.waker.wake();
         }
         let status = unsafe {
@@ -308,7 +305,7 @@ impl Worker {
             )
         };
         if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, 0)
+            RequestHandle::Tag(status)
         } else {
             panic!("failed to recv tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -504,7 +501,7 @@ impl Endpoint {
             trace!("stream_send: complete");
             RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, buf.len())
+            RequestHandle::Send(status, buf.len())
         } else {
             panic!("failed to send stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -520,7 +517,6 @@ impl Endpoint {
                 length
             );
             let request = &mut *(request as *mut Request);
-            request.length = length as usize;
             request.waker.wake();
         }
         let mut length = MaybeUninit::uninit();
@@ -540,7 +536,7 @@ impl Endpoint {
             trace!("stream_recv: complete. len={}", length);
             RequestHandle::Ready(length)
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, 0)
+            RequestHandle::Stream(status)
         } else {
             panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -567,7 +563,7 @@ impl Endpoint {
             trace!("tag_send: complete");
             RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, buf.len())
+            RequestHandle::Send(status, buf.len())
         } else {
             panic!("failed to send tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -603,7 +599,7 @@ impl Endpoint {
             trace!("tag_send_vectored: complete");
             RequestHandle::Ready(total_len)
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, total_len)
+            RequestHandle::Send(status, total_len)
         } else {
             panic!("failed to send tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -649,7 +645,6 @@ impl Drop for Endpoint {
 #[derive(Default)]
 pub struct Request {
     waker: AtomicWaker,
-    length: usize,
 }
 
 impl Request {
@@ -672,63 +667,79 @@ impl Request {
 /// A handle to the request returned from async IO functions.
 pub enum RequestHandle {
     Ready(usize),
-    Pending(NonNull<Request>),
+    Send(ucs_status_ptr_t, usize),
+    Stream(ucs_status_ptr_t),
+    Tag(ucs_status_ptr_t),
 }
 
 unsafe impl Send for RequestHandle {}
 
 impl RequestHandle {
-    fn from(status_ptr: ucs_status_ptr_t, len: usize) -> Self {
-        assert!(UCS_PTR_IS_PTR(status_ptr));
-        let mut ptr = NonNull::new(status_ptr as *mut Request).unwrap();
-        unsafe { ptr.as_mut() }.length = len;
-        RequestHandle::Pending(ptr)
-    }
-
-    fn check_status(&self) -> ucs_status_t {
-        match self {
-            RequestHandle::Ready(_) => ucs_status_t::UCS_OK,
-            RequestHandle::Pending(ptr) => unsafe { ucp_request_check_status(ptr.as_ptr() as _) },
-        }
-    }
-
-    fn is_completed(&self) -> bool {
-        self.check_status() != ucs_status_t::UCS_INPROGRESS
-    }
-
-    fn len(&self) -> usize {
-        match self {
-            RequestHandle::Ready(len) => *len,
-            RequestHandle::Pending(ptr) => unsafe { ptr.as_ref() }.length,
+    fn test(&self) -> Poll<usize> {
+        match *self {
+            RequestHandle::Ready(len) => Poll::Ready(len),
+            RequestHandle::Send(ptr, len) => unsafe {
+                let status = ucp_request_check_status(ptr as _);
+                if status == ucs_status_t::UCS_INPROGRESS {
+                    Poll::Pending
+                } else {
+                    Poll::Ready(len)
+                }
+            },
+            RequestHandle::Stream(ptr) => unsafe {
+                let mut len = MaybeUninit::<usize>::uninit();
+                let status = ucp_stream_recv_request_test(ptr as _, len.as_mut_ptr() as _);
+                if status == ucs_status_t::UCS_INPROGRESS {
+                    Poll::Pending
+                } else {
+                    Poll::Ready(len.assume_init())
+                }
+            },
+            RequestHandle::Tag(ptr) => unsafe {
+                let mut info = MaybeUninit::<ucp_tag_recv_info>::uninit();
+                let status = ucp_tag_recv_request_test(ptr as _, info.as_mut_ptr() as _);
+                if status == ucs_status_t::UCS_INPROGRESS {
+                    Poll::Pending
+                } else {
+                    Poll::Ready(info.assume_init().length as usize)
+                }
+            },
         }
     }
 
     fn register_waker(&mut self, waker: &Waker) {
-        if let RequestHandle::Pending(ptr) = self {
-            unsafe { ptr.as_mut() }.waker.register(waker);
-        }
+        let ptr = *match self {
+            RequestHandle::Ready(_) => unreachable!(),
+            RequestHandle::Send(ptr, _) => ptr,
+            RequestHandle::Stream(ptr) => ptr,
+            RequestHandle::Tag(ptr) => ptr,
+        };
+        unsafe { &mut *(ptr as *mut Request) }.waker.register(waker);
     }
 }
 
 impl Future for RequestHandle {
     type Output = usize;
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
-        if self.is_completed() {
-            return Poll::Ready(self.len());
+        if let Poll::Ready(len) = self.test() {
+            return Poll::Ready(len);
         }
         self.register_waker(cx.waker());
-        if self.is_completed() {
-            return Poll::Ready(self.len());
-        }
-        Poll::Pending
+        self.test()
     }
 }
 
 impl Drop for RequestHandle {
     fn drop(&mut self) {
-        if let RequestHandle::Pending(ptr) = self {
-            trace!("request free: {:?}", ptr.as_ptr());
-            unsafe { ucp_request_free(ptr.as_ptr() as _) };
+        let ptr = match *self {
+            RequestHandle::Ready(_) => None,
+            RequestHandle::Send(ptr, _) => Some(ptr),
+            RequestHandle::Stream(ptr) => Some(ptr),
+            RequestHandle::Tag(ptr) => Some(ptr),
+        };
+        if let Some(ptr) = ptr {
+            trace!("request free: {:?}", ptr);
+            unsafe { ucp_request_free(ptr as _) };
         }
     }
 }

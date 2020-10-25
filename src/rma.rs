@@ -120,9 +120,9 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("put: complete.");
-            RequestHandle::Ready(0)
+            RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, 0)
+            RequestHandle::Send(status, buf.len())
         } else {
             panic!("failed to put: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -147,9 +147,9 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("get: complete.");
-            RequestHandle::Ready(0)
+            RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::from(status, 0)
+            RequestHandle::Send(status, buf.len())
         } else {
             panic!("failed to get: {:?}", UCS_PTR_RAW_STATUS(status));
         }
