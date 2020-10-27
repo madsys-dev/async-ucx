@@ -12,7 +12,8 @@ use std::os::raw::c_void;
 use std::os::unix::io::AsRawFd;
 use std::pin::Pin;
 use std::ptr::{null, null_mut};
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::Mutex;
 use std::task::{Poll, Waker};
 use ucx_sys::*;
 
@@ -59,11 +60,8 @@ pub struct Context {
     handle: ucp_context_h,
 }
 
-unsafe impl Send for Context {}
-unsafe impl Sync for Context {}
-
 impl Context {
-    pub fn new(config: &Config) -> Arc<Self> {
+    pub fn new(config: &Config) -> Rc<Self> {
         let params = ucp_params_t {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
@@ -80,7 +78,7 @@ impl Context {
             request_init: Some(Request::init),
             request_cleanup: Some(Request::cleanup),
             tag_sender_mask: 0,
-            mt_workers_shared: 1,
+            mt_workers_shared: 0,
             estimated_num_eps: 0,
             estimated_num_ppn: 0,
         };
@@ -95,12 +93,12 @@ impl Context {
             )
         };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        Arc::new(Context {
+        Rc::new(Context {
             handle: unsafe { handle.assume_init() },
         })
     }
 
-    pub fn create_worker(self: &Arc<Self>) -> Arc<Worker> {
+    pub fn create_worker(self: &Rc<Self>) -> Rc<Worker> {
         Worker::new(self)
     }
 }
@@ -114,11 +112,8 @@ impl Drop for Context {
 #[derive(Debug)]
 pub struct Worker {
     handle: ucp_worker_h,
-    context: Arc<Context>,
+    context: Rc<Context>,
 }
-
-unsafe impl Send for Worker {}
-unsafe impl Sync for Worker {}
 
 impl Drop for Worker {
     fn drop(&mut self) {
@@ -127,34 +122,34 @@ impl Drop for Worker {
 }
 
 impl Worker {
-    fn new(context: &Arc<Context>) -> Arc<Self> {
-        let params = ucp_worker_params_t {
-            field_mask: ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE.0 as u64,
-            thread_mode: ucs_thread_mode_t::UCS_THREAD_MODE_MULTI,
-            cpu_mask: ucs_cpu_set_t { ucs_bits: [0; 16] },
-            events: 0,
-            event_fd: 0,
-            user_data: null_mut(),
-        };
+    fn new(context: &Rc<Context>) -> Rc<Self> {
+        let mut params = MaybeUninit::<ucp_worker_params_t>::uninit();
+        unsafe { (*params.as_mut_ptr()).field_mask = 0 };
         let mut handle = MaybeUninit::uninit();
-        let status = unsafe { ucp_worker_create(context.handle, &params, handle.as_mut_ptr()) };
+        let status =
+            unsafe { ucp_worker_create(context.handle, params.as_ptr(), handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        let worker = Arc::new(Worker {
+        Rc::new(Worker {
             handle: unsafe { handle.assume_init() },
             context: context.clone(),
+        })
+    }
+
+    // Spawn a local future to make progress on the worker.
+    pub fn spawn_polling(self: Rc<Self>) {
+        tokio::task::spawn_local(async move {
+            while Rc::strong_count(&self) > 1 {
+                while self.progress() != 0 {}
+                tokio::task::yield_now().await;
+            }
         });
-        assert_eq!(
-            worker.thread_mode(),
-            ucs_thread_mode_t::UCS_THREAD_MODE_MULTI
-        );
-        worker
     }
 
     pub fn print_to_stderr(&self) {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
     }
 
-    fn thread_mode(&self) -> ucs_thread_mode_t {
+    pub fn thread_mode(&self) -> ucs_thread_mode_t {
         let mut attr = MaybeUninit::<ucp_worker_attr>::uninit();
         unsafe { &mut *attr.as_mut_ptr() }.field_mask =
             ucp_worker_attr_field::UCP_WORKER_ATTR_FIELD_THREAD_MODE.0 as u64;
@@ -178,11 +173,11 @@ impl Worker {
         }
     }
 
-    pub fn create_listener(self: &Arc<Self>, addr: SocketAddr) -> Arc<Listener> {
+    pub fn create_listener(self: &Rc<Self>, addr: SocketAddr) -> Rc<Listener> {
         Listener::new(self, addr)
     }
 
-    pub fn create_endpoint(self: &Arc<Self>, addr: SocketAddr) -> Arc<Endpoint> {
+    pub fn create_endpoint(self: &Rc<Self>, addr: SocketAddr) -> Rc<Endpoint> {
         Endpoint::new(self, addr)
     }
 
@@ -341,21 +336,21 @@ impl<'a> Drop for WorkerAddress<'a> {
 pub struct Listener {
     handle: ucp_listener_h,
     incomings: Mutex<Queue>,
-    worker: Arc<Worker>,
+    worker: Rc<Worker>,
 }
 
 #[derive(Debug, Default)]
 struct Queue {
-    items: VecDeque<Arc<Endpoint>>,
+    items: VecDeque<Rc<Endpoint>>,
     wakers: Vec<Waker>,
 }
 
 impl Listener {
-    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Arc<Self> {
+    fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Rc<Self> {
         unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut c_void) {
             trace!("accept endpoint={:?}", ep);
-            let listener = ManuallyDrop::new(Arc::from_raw(arg as *const Listener));
-            let endpoint = Arc::new(Endpoint {
+            let listener = ManuallyDrop::new(Rc::from_raw(arg as *const Listener));
+            let endpoint = Rc::new(Endpoint {
                 handle: ep,
                 worker: listener.worker.clone(),
             });
@@ -366,7 +361,7 @@ impl Listener {
             }
         }
         #[allow(clippy::uninit_assumed_init)]
-        let mut listener = Arc::new(Listener {
+        let mut listener = Rc::new(Listener {
             handle: unsafe { MaybeUninit::uninit().assume_init() },
             incomings: Mutex::default(),
             worker: worker.clone(),
@@ -389,7 +384,7 @@ impl Listener {
                 arg: null_mut(),
             },
         };
-        let handle = &mut Arc::get_mut(&mut listener).unwrap().handle;
+        let handle = &mut Rc::get_mut(&mut listener).unwrap().handle;
         let status = unsafe { ucp_listener_create(worker.handle, &params, handle) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         listener
@@ -409,7 +404,7 @@ impl Listener {
         sockaddr.into_addr().unwrap()
     }
 
-    pub async fn accept(&self) -> Arc<Endpoint> {
+    pub async fn accept(&self) -> Rc<Endpoint> {
         poll_fn(|cx| {
             let mut incomings = self.incomings.lock().unwrap();
             if let Some(endpoint) = incomings.items.pop_front() {
@@ -432,14 +427,11 @@ impl Drop for Listener {
 #[derive(Debug)]
 pub struct Endpoint {
     handle: ucp_ep_h,
-    worker: Arc<Worker>,
+    worker: Rc<Worker>,
 }
 
-unsafe impl Send for Endpoint {}
-unsafe impl Sync for Endpoint {}
-
 impl Endpoint {
-    fn new(worker: &Arc<Worker>, addr: SocketAddr) -> Arc<Self> {
+    fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Rc<Self> {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
@@ -466,7 +458,7 @@ impl Endpoint {
         assert_eq!(status, ucs_status_t::UCS_OK);
         let handle = unsafe { handle.assume_init() };
         trace!("create endpoint={:?}", handle);
-        Arc::new(Endpoint {
+        Rc::new(Endpoint {
             handle,
             worker: worker.clone(),
         })
@@ -619,7 +611,7 @@ impl Endpoint {
         unsafe { ucp_ep_flush_nb(self.handle, 0, Some(callback)) };
     }
 
-    pub fn worker(&self) -> &Arc<Worker> {
+    pub fn worker(&self) -> &Rc<Worker> {
         &self.worker
     }
 }
@@ -671,8 +663,6 @@ pub enum RequestHandle {
     Stream(ucs_status_ptr_t),
     Tag(ucs_status_ptr_t),
 }
-
-unsafe impl Send for RequestHandle {}
 
 impl RequestHandle {
     fn test(&self) -> Poll<usize> {

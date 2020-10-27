@@ -3,11 +3,11 @@ use super::*;
 #[derive(Debug)]
 pub struct MemoryHandle {
     handle: ucp_mem_h,
-    context: Arc<Context>,
+    context: Rc<Context>,
 }
 
 impl MemoryHandle {
-    pub fn register(context: &Arc<Context>, region: &mut [u8]) -> Self {
+    pub fn register(context: &Rc<Context>, region: &mut [u8]) -> Self {
         let params = ucp_mem_map_params_t {
             field_mask: (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS
                 | ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH)

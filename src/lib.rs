@@ -7,27 +7,23 @@ use futures::pin_mut;
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 use tokio::io::{ReadBuf, Result};
 use tokio::prelude::*;
 use tokio::stream::Stream;
 
-mod reactor;
 pub mod ucp;
-
-pub use self::reactor::UCP_CONTEXT;
 
 /// A UCP stream between a local and a remote socket.
 pub struct UcpStream {
-    endpoint: Arc<ucp::Endpoint>,
+    endpoint: Rc<ucp::Endpoint>,
     read_future: Option<ucp::RequestHandle>,
     write_future: Option<ucp::RequestHandle>,
 }
 
 impl UcpStream {
-    pub async fn connect(addr: impl ToSocketAddrs) -> Result<UcpStream> {
-        let worker = self::reactor::create_worker();
+    pub async fn connect(worker: &Rc<ucp::Worker>, addr: impl ToSocketAddrs) -> Result<UcpStream> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let endpoint = worker.create_endpoint(addr);
         Ok(UcpStream::from(endpoint))
@@ -41,11 +37,11 @@ impl UcpStream {
         todo!()
     }
 
-    pub fn endpoint(&self) -> Arc<ucp::Endpoint> {
+    pub fn endpoint(&self) -> Rc<ucp::Endpoint> {
         self.endpoint.clone()
     }
 
-    fn from(endpoint: Arc<ucp::Endpoint>) -> Self {
+    fn from(endpoint: Rc<ucp::Endpoint>) -> Self {
         UcpStream {
             endpoint,
             read_future: None,
@@ -106,12 +102,11 @@ impl AsyncWrite for UcpStream {
 
 /// A UCP server, listening for connections.
 pub struct UcpListener {
-    listener: Arc<ucp::Listener>,
+    listener: Rc<ucp::Listener>,
 }
 
 impl UcpListener {
-    pub async fn bind(addr: impl ToSocketAddrs) -> Result<UcpListener> {
-        let worker = self::reactor::create_worker();
+    pub async fn bind(worker: &Rc<ucp::Worker>, addr: impl ToSocketAddrs) -> Result<UcpListener> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let listener = worker.create_listener(addr);
         Ok(UcpListener { listener })
