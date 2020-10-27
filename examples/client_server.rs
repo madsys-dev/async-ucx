@@ -1,3 +1,4 @@
+use std::mem::{transmute, MaybeUninit};
 use tokio_ucx::ucp::*;
 
 #[tokio::main]
@@ -30,9 +31,9 @@ async fn main() {
         println!("accept");
         endpoint.print_to_stderr();
 
-        let mut buf = [0; 10];
+        let mut buf = [MaybeUninit::uninit(); 10];
         let len = endpoint.stream_recv(&mut buf).await;
-        let msg = std::str::from_utf8(&buf[..len]);
+        let msg = std::str::from_utf8(unsafe { transmute(&buf[..len]) });
         println!("recv: {:?}", msg);
     }
 }

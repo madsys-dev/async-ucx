@@ -1,5 +1,5 @@
 use std::io::Result;
-use tokio::prelude::*;
+use std::mem::{transmute, MaybeUninit};
 use tokio_ucx::*;
 
 #[tokio::main]
@@ -10,7 +10,7 @@ async fn main() -> Result<()> {
 
     if let Some(server_addr) = std::env::args().nth(1) {
         println!("client: connect to {:?}", server_addr);
-        let mut stream = UcpStream::connect(server_addr).await?;
+        let stream = UcpStream::connect(server_addr).await?;
         println!("send: {:?}", HELLO);
         stream.endpoint().tag_send(100, HELLO.as_bytes()).await;
         stream.endpoint().tag_send(101, &long_msg).await;
@@ -18,18 +18,19 @@ async fn main() -> Result<()> {
         println!("server");
         let listener = UcpListener::bind("0.0.0.0:10000").await?;
         println!("listening on {}", listener.local_addr()?);
-        let mut stream = listener.accept().await?;
+        let stream = listener.accept().await?;
         println!("accept");
 
-        let mut buf = [0; 0x1005];
-        let len = stream.endpoint().tag_recv(100, &mut buf).await;
-        let msg = std::str::from_utf8(&buf[..len]).unwrap();
+        let mut buf = [MaybeUninit::uninit(); 0x1005];
+        let len = stream.endpoint().worker().tag_recv(100, &mut buf).await;
+        let msg = std::str::from_utf8(unsafe { transmute(&buf[..len]) }).unwrap();
         println!("recv: {:?}", msg);
         assert_eq!(msg, HELLO);
 
-        let len = stream.endpoint().tag_recv(101, &mut buf).await?;
+        let len = stream.endpoint().worker().tag_recv(101, &mut buf).await;
         println!("recv long message, len={}", len);
-        assert_eq!(&buf[..len], long_msg.as_slice());
+        let msg: &[u8] = unsafe { transmute(&buf[..len]) };
+        assert_eq!(msg, long_msg.as_slice());
     }
     Ok(())
 }

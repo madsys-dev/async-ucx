@@ -5,12 +5,11 @@ extern crate log;
 
 use futures::pin_mut;
 use std::future::Future;
-use std::mem::MaybeUninit;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::io::Result;
+use tokio::io::{ReadBuf, Result};
 use tokio::prelude::*;
 use tokio::stream::Stream;
 
@@ -59,23 +58,25 @@ impl AsyncRead for UcpStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<Result<()>> {
         let mut future = self
             .read_future
             .take()
-            .unwrap_or_else(|| self.endpoint.stream_recv(buf));
-        let result = Pin::new(&mut future).poll(cx).map(Ok);
-        if result.is_pending() {
-            self.read_future = Some(future);
-        }
+            .unwrap_or_else(|| self.endpoint.stream_recv(unsafe { buf.unfilled_mut() }));
+        let result = Pin::new(&mut future).poll(cx);
         trace!("poll_read => {:?}", result);
-        result
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [MaybeUninit<u8>]) -> bool {
-        // override default function, don't zero the buffer.
-        true
+        match result {
+            Poll::Ready(len) => unsafe {
+                buf.assume_init(len);
+                buf.set_filled(len);
+                Poll::Ready(Ok(()))
+            },
+            Poll::Pending => {
+                self.read_future = Some(future);
+                Poll::Pending
+            }
+        }
     }
 }
 

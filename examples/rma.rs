@@ -1,3 +1,4 @@
+use std::mem::{transmute, MaybeUninit};
 use tokio_ucx::ucp::*;
 
 #[tokio::main]
@@ -25,7 +26,7 @@ async fn main() {
         endpoint.stream_send(mem.pack().as_ref()).await;
         println!("send memory handle");
 
-        endpoint.stream_recv(&mut [0; 1]).await;
+        endpoint.stream_recv(&mut [MaybeUninit::uninit(); 1]).await;
     } else {
         println!("server");
         let config = Config::default();
@@ -37,21 +38,21 @@ async fn main() {
             worker.progress();
         });
         println!("listening on {}", listener.socket_addr());
-        let mut endpoint = listener.accept().await;
+        let endpoint = listener.accept().await;
         println!("accept");
         endpoint.print_to_stderr();
 
-        let mut vaddr_buf = [0; 8];
+        let mut vaddr_buf = [MaybeUninit::uninit(); 8];
         let len = endpoint.stream_recv(&mut vaddr_buf).await;
         assert_eq!(len, 8);
-        let vaddr = u64::from_ne_bytes(vaddr_buf);
+        let vaddr = u64::from_ne_bytes(unsafe { transmute(vaddr_buf) });
         println!("recv: vaddr={:#x}", vaddr);
 
-        let mut rkey_buf = [0; 100];
+        let mut rkey_buf = [MaybeUninit::uninit(); 100];
         let len = endpoint.stream_recv(&mut rkey_buf).await;
         println!("recv rkey: len={}", len);
 
-        let rkey = RKey::unpack(&endpoint, &rkey_buf[..len]);
+        let rkey = RKey::unpack(&endpoint, unsafe { transmute(&rkey_buf[..len]) });
         let mut buf = vec![0; 0x1000];
         endpoint.get(&mut buf, vaddr, &rkey);
         println!("get remote memory");

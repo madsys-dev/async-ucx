@@ -1,8 +1,9 @@
 use std::io::Result;
+use std::mem::MaybeUninit;
 use std::sync::atomic::*;
 use tokio_ucx::ucp::*;
 
-#[tokio::main(core_threads = 1)]
+#[tokio::main(worker_threads = 1)]
 async fn main() -> Result<()> {
     env_logger::init();
     let server_addr = std::env::args().nth(1).unwrap();
@@ -19,7 +20,7 @@ async fn main() -> Result<()> {
     });
     tokio::spawn(async {
         loop {
-            tokio::time::delay_for(std::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             let count = COUNT.swap(0, Ordering::SeqCst);
             println!("{} IOPS", count);
         }
@@ -31,7 +32,7 @@ async fn main() -> Result<()> {
         ep.tag_send(100, &[i]).await;
         tokio::spawn(async move {
             let tag = i as u64 + 200;
-            let mut buf = vec![0; 50000];
+            let mut buf = vec![MaybeUninit::uninit(); 50000];
             loop {
                 ep.worker().tag_recv(tag, &mut buf).await;
                 ep.tag_send(tag, &[0]).await;

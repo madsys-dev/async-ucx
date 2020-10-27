@@ -237,7 +237,7 @@ impl Worker {
         assert_eq!(status, ucs_status_t::UCS_OK);
     }
 
-    pub fn tag_recv(&self, tag: u64, buf: &mut [u8]) -> RequestHandle {
+    pub fn tag_recv(&self, tag: u64, buf: &mut [MaybeUninit<u8>]) -> RequestHandle {
         trace!("tag_recv: worker={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(
             request: *mut c_void,
@@ -507,7 +507,7 @@ impl Endpoint {
         }
     }
 
-    pub fn stream_recv(&self, buf: &mut [u8]) -> RequestHandle {
+    pub fn stream_recv(&self, buf: &mut [MaybeUninit<u8>]) -> RequestHandle {
         trace!("stream_recv: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t, length: u64) {
             trace!(
