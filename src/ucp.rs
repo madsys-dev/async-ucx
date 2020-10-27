@@ -19,6 +19,8 @@ use ucx_sys::*;
 
 #[path = "rma.rs"]
 mod rma;
+#[path = "tag.rs"]
+mod tag;
 
 pub use self::rma::*;
 
@@ -230,80 +232,6 @@ impl Worker {
     pub fn flush(&self) {
         let status = unsafe { ucp_worker_flush(self.handle) };
         assert_eq!(status, ucs_status_t::UCS_OK);
-    }
-
-    pub fn tag_recv(&self, tag: u64, buf: &mut [MaybeUninit<u8>]) -> RequestHandle {
-        trace!("tag_recv: worker={:?} len={}", self.handle, buf.len());
-        unsafe extern "C" fn callback(
-            request: *mut c_void,
-            status: ucs_status_t,
-            info: *mut ucp_tag_recv_info,
-        ) {
-            let length = (*info).length;
-            trace!(
-                "tag_recv: complete. req={:?}, status={:?}, len={}",
-                request,
-                status,
-                length
-            );
-            let request = &mut *(request as *mut Request);
-            request.waker.wake();
-        }
-        let status = unsafe {
-            ucp_tag_recv_nb(
-                self.handle,
-                buf.as_mut_ptr() as _,
-                buf.len() as _,
-                ucp_dt_make_contig(1),
-                tag,
-                u64::max_value(),
-                Some(callback),
-            )
-        };
-        if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Tag(status)
-        } else {
-            panic!("failed to recv tag: {:?}", UCS_PTR_RAW_STATUS(status));
-        }
-    }
-
-    pub fn tag_recv_vectored(&self, tag: u64, iov: &mut [IoSliceMut<'_>]) -> RequestHandle {
-        trace!(
-            "tag_recv_vectored: worker={:?} iov.len={}",
-            self.handle,
-            iov.len()
-        );
-        unsafe extern "C" fn callback(
-            request: *mut c_void,
-            status: ucs_status_t,
-            info: *mut ucp_tag_recv_info,
-        ) {
-            let length = (*info).length;
-            trace!(
-                "tag_recv_vectored: complete. req={:?}, status={:?}, len={}",
-                request,
-                status,
-                length
-            );
-            let request = &mut *(request as *mut Request);
-            request.waker.wake();
-        }
-        let status = unsafe {
-            ucp_tag_recv_nb(
-                self.handle,
-                iov.as_ptr() as _,
-                iov.len() as _,
-                ucp_dt_type::UCP_DATATYPE_IOV as _,
-                tag,
-                u64::max_value(),
-                Some(callback),
-            )
-        };
-        if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Tag(status)
-        } else {
-            panic!("failed to recv tag: {:?}", UCS_PTR_RAW_STATUS(status));
-        }
     }
 }
 
@@ -534,69 +462,6 @@ impl Endpoint {
         }
     }
 
-    pub fn tag_send(&self, tag: u64, buf: &[u8]) -> RequestHandle {
-        trace!("tag_send: endpoint={:?} len={}", self.handle, buf.len());
-        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
-            trace!("tag_send: complete. req={:?}, status={:?}", request, status);
-            let request = &mut *(request as *mut Request);
-            request.waker.wake();
-        }
-        let status = unsafe {
-            ucp_tag_send_nb(
-                self.handle,
-                buf.as_ptr() as _,
-                buf.len() as _,
-                ucp_dt_make_contig(1),
-                tag,
-                Some(callback),
-            )
-        };
-        if status.is_null() {
-            trace!("tag_send: complete");
-            RequestHandle::Ready(buf.len())
-        } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Send(status, buf.len())
-        } else {
-            panic!("failed to send tag: {:?}", UCS_PTR_RAW_STATUS(status));
-        }
-    }
-
-    pub fn tag_send_vectored(&self, tag: u64, iov: &[IoSlice<'_>]) -> RequestHandle {
-        trace!(
-            "tag_send_vectored: endpoint={:?} iov.len={}",
-            self.handle,
-            iov.len()
-        );
-        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
-            trace!(
-                "tag_send_vectored: complete. req={:?}, status={:?}",
-                request,
-                status
-            );
-            let request = &mut *(request as *mut Request);
-            request.waker.wake();
-        }
-        let status = unsafe {
-            ucp_tag_send_nb(
-                self.handle,
-                iov.as_ptr() as _,
-                iov.len() as _,
-                ucp_dt_type::UCP_DATATYPE_IOV as _,
-                tag,
-                Some(callback),
-            )
-        };
-        let total_len = iov.iter().map(|v| v.len()).sum();
-        if status.is_null() {
-            trace!("tag_send_vectored: complete");
-            RequestHandle::Ready(total_len)
-        } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Send(status, total_len)
-        } else {
-            panic!("failed to send tag: {:?}", UCS_PTR_RAW_STATUS(status));
-        }
-    }
-
     /// This routine flushes all outstanding AMO and RMA communications on the endpoint.
     pub fn flush(&self) {
         let status = unsafe { ucp_ep_flush(self.handle) };
@@ -661,7 +526,6 @@ pub enum RequestHandle {
     Ready(usize),
     Send(ucs_status_ptr_t, usize),
     Stream(ucs_status_ptr_t),
-    Tag(ucs_status_ptr_t),
 }
 
 impl RequestHandle {
@@ -685,15 +549,6 @@ impl RequestHandle {
                     Poll::Ready(len.assume_init())
                 }
             },
-            RequestHandle::Tag(ptr) => unsafe {
-                let mut info = MaybeUninit::<ucp_tag_recv_info>::uninit();
-                let status = ucp_tag_recv_request_test(ptr as _, info.as_mut_ptr() as _);
-                if status == ucs_status_t::UCS_INPROGRESS {
-                    Poll::Pending
-                } else {
-                    Poll::Ready(info.assume_init().length as usize)
-                }
-            },
         }
     }
 
@@ -702,7 +557,6 @@ impl RequestHandle {
             RequestHandle::Ready(_) => unreachable!(),
             RequestHandle::Send(ptr, _) => ptr,
             RequestHandle::Stream(ptr) => ptr,
-            RequestHandle::Tag(ptr) => ptr,
         };
         unsafe { &mut *(ptr as *mut Request) }.waker.register(waker);
     }
@@ -725,7 +579,6 @@ impl Drop for RequestHandle {
             RequestHandle::Ready(_) => None,
             RequestHandle::Send(ptr, _) => Some(ptr),
             RequestHandle::Stream(ptr) => Some(ptr),
-            RequestHandle::Tag(ptr) => Some(ptr),
         };
         if let Some(ptr) = ptr {
             trace!("request free: {:?}", ptr);
