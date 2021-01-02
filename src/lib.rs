@@ -3,15 +3,12 @@
 #[macro_use]
 extern crate log;
 
-use futures::pin_mut;
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
-use tokio::io::{ReadBuf, Result};
-use tokio::prelude::*;
-use tokio::stream::Stream;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, Result};
 
 pub mod ucp;
 
@@ -119,17 +116,5 @@ impl UcpListener {
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.listener.socket_addr())
-    }
-}
-
-impl Stream for UcpListener {
-    type Item = Result<UcpStream>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let future = self.listener.accept();
-        pin_mut!(future);
-        future
-            .poll(cx)
-            .map(|endpoint| Some(Ok(UcpStream::from(endpoint))))
     }
 }

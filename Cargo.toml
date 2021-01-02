@@ -8,11 +8,11 @@ edition = "2018"
 
 [dependencies]
 ucx-sys = { path = "ucx-sys" }
-tokio = { version = "0.3", features = ["full"] }
+tokio = { version = "1", features = ["rt"] }
 os_socketaddr = "0.1"
 futures = "0.3"
 lazy_static = "1.4"
 log = "0.4"
 
 [dev-dependencies]
-env_logger = "0.7"
+env_logger = "0.8"
