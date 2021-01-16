@@ -3,6 +3,7 @@
 #[macro_use]
 extern crate log;
 
+#[cfg(test)]
 macro_rules! spawn_thread {
     ($future:expr) => {
         std::thread::spawn(|| {
