@@ -76,14 +76,12 @@ impl Endpoint {
     }
 }
 
-fn poll_stream(ptr: ucs_status_ptr_t) -> Poll<usize> {
-    unsafe {
-        let mut len = MaybeUninit::<usize>::uninit();
-        let status = ucp_stream_recv_request_test(ptr as _, len.as_mut_ptr() as _);
-        if status == ucs_status_t::UCS_INPROGRESS {
-            Poll::Pending
-        } else {
-            Poll::Ready(len.assume_init())
-        }
+unsafe fn poll_stream(ptr: ucs_status_ptr_t) -> Poll<usize> {
+    let mut len = MaybeUninit::<usize>::uninit();
+    let status = ucp_stream_recv_request_test(ptr as _, len.as_mut_ptr() as _);
+    if status == ucs_status_t::UCS_INPROGRESS {
+        Poll::Pending
+    } else {
+        Poll::Ready(len.assume_init())
     }
 }

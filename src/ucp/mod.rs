@@ -1,4 +1,4 @@
-//! Mid-level bindings for UCP.
+//! Unified Communication Protocol (UCP).
 
 use futures::task::AtomicWaker;
 use std::ffi::CString;
@@ -16,6 +16,7 @@ pub use self::endpoint::*;
 pub use self::listener::*;
 pub use self::worker::*;
 
+/// The configuration for UCP application context.
 #[derive(Debug)]
 pub struct Config {
     handle: *mut ucp_config_t,
@@ -33,6 +34,10 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Prints information about the context configuration.
+    ///
+    /// Including memory domains, transport resources, and other useful
+    /// information associated with the context.
     pub fn print_to_stderr(&self) {
         let flags = ucs_config_print_flags_t::UCS_CONFIG_PRINT_CONFIG
             | ucs_config_print_flags_t::UCS_CONFIG_PRINT_DOC
@@ -49,16 +54,19 @@ impl Drop for Config {
     }
 }
 
+/// An object that holds a UCP communication instance's global information.
 #[derive(Debug)]
 pub struct Context {
     handle: ucp_context_h,
 }
 
 impl Context {
+    /// Creates and initializes a UCP application context with default configuration.
     pub fn new() -> Rc<Self> {
         Self::new_with_config(&Config::default())
     }
 
+    /// Creates and initializes a UCP application context with specified configuration.
     pub fn new_with_config(config: &Config) -> Rc<Self> {
         let params = ucp_params_t {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
@@ -95,6 +103,7 @@ impl Context {
         })
     }
 
+    /// Create a `Worker` object.
     pub fn create_worker(self: &Rc<Self>) -> Rc<Worker> {
         Worker::new(self)
     }

@@ -2,6 +2,7 @@ use super::*;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
 
+/// An object representing the communication context.
 #[derive(Debug)]
 pub struct Worker {
     pub(super) handle: ucp_worker_h,
@@ -36,6 +37,10 @@ impl Worker {
         }
     }
 
+    /// Prints information about the worker.
+    ///
+    /// Including protocols being used, thresholds, UCT transport methods,
+    /// and other useful information associated with the worker.
     pub fn print_to_stderr(&self) {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
     }
@@ -50,6 +55,10 @@ impl Worker {
         attr.thread_mode
     }
 
+    /// Get the address of the worker object.
+    ///
+    /// This address can be passed to remote instances of the UCP library
+    /// in order to connect to this worker.
     pub fn address(&self) -> WorkerAddress<'_> {
         let mut handle = MaybeUninit::uninit();
         let mut length = MaybeUninit::uninit();
@@ -72,11 +81,14 @@ impl Worker {
         Endpoint::new(self, addr)
     }
 
+    /// Waits (blocking) until an event has happened.
     pub fn wait(&self) {
         let status = unsafe { ucp_worker_wait(self.handle) };
         assert_eq!(status, ucs_status_t::UCS_OK);
     }
 
+    /// This needs to be called before waiting on each notification on this worker.
+    ///
     /// Returns 'true' if one can wait for events (sleep mode).
     pub fn arm(&self) -> bool {
         let status = unsafe { ucp_worker_arm(self.handle) };
@@ -87,10 +99,12 @@ impl Worker {
         }
     }
 
+    /// Explicitly progresses all communication operations on a worker.
     pub fn progress(&self) -> u32 {
         unsafe { ucp_worker_progress(self.handle) }
     }
 
+    /// Returns a valid file descriptor for polling functions.
     pub fn event_fd(&self) -> i32 {
         let mut fd = MaybeUninit::uninit();
         let status = unsafe { ucp_worker_get_efd(self.handle, fd.as_mut_ptr()) };
@@ -130,6 +144,7 @@ impl AsRawFd for Worker {
     }
 }
 
+/// The address of the worker object.
 #[derive(Debug)]
 pub struct WorkerAddress<'a> {
     handle: *mut ucp_address_t,

@@ -89,7 +89,7 @@ impl Endpoint {
         if status.is_null() {
             trace!("close: complete");
         } else if UCS_PTR_IS_PTR(status) {
-            while poll_normal(status).is_pending() {
+            while unsafe { poll_normal(status) }.is_pending() {
                 futures_lite::future::yield_now().await;
             }
         } else {
@@ -113,18 +113,18 @@ impl Drop for Endpoint {
 /// A handle to the request returned from async IO functions.
 struct RequestHandle<T> {
     ptr: ucs_status_ptr_t,
-    poll_fn: fn(ucs_status_ptr_t) -> Poll<T>,
+    poll_fn: unsafe fn(ucs_status_ptr_t) -> Poll<T>,
 }
 
 impl<T> Future for RequestHandle<T> {
     type Output = T;
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
-        if let ret @ Poll::Ready(_) = (self.poll_fn)(self.ptr) {
+        if let ret @ Poll::Ready(_) = unsafe { (self.poll_fn)(self.ptr) } {
             return ret;
         }
         let request = unsafe { &mut *(self.ptr as *mut Request) };
         request.waker.register(cx.waker());
-        (self.poll_fn)(self.ptr)
+        unsafe { (self.poll_fn)(self.ptr) }
     }
 }
 
@@ -135,13 +135,11 @@ impl<T> Drop for RequestHandle<T> {
     }
 }
 
-fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<()> {
-    unsafe {
-        let status = ucp_request_check_status(ptr as _);
-        if status == ucs_status_t::UCS_INPROGRESS {
-            Poll::Pending
-        } else {
-            Poll::Ready(())
-        }
+unsafe fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<()> {
+    let status = ucp_request_check_status(ptr as _);
+    if status == ucs_status_t::UCS_INPROGRESS {
+        Poll::Pending
+    } else {
+        Poll::Ready(())
     }
 }
