@@ -109,7 +109,7 @@ mod tests {
         env_logger::init();
         let (sender, recver) = tokio::sync::oneshot::channel();
         let f1 = spawn_thread!(async move {
-            let context = Context::new(&Config::default());
+            let context = Context::new();
             let worker = context.create_worker();
             tokio::task::spawn_local(worker.clone().polling());
             let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
@@ -118,7 +118,7 @@ mod tests {
             let _endpoint = listener.accept().await;
         });
         spawn_thread!(async move {
-            let context = Context::new(&Config::default());
+            let context = Context::new();
             let worker = context.create_worker();
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
             let listen_port = recver.await.unwrap();

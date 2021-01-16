@@ -171,9 +171,9 @@ mod tests {
     }
 
     async fn _put_get() {
-        let context1 = Context::new(&Config::default());
+        let context1 = Context::new();
         let worker1 = context1.create_worker();
-        let context2 = Context::new(&Config::default());
+        let context2 = Context::new();
         let worker2 = context2.create_worker();
         tokio::task::spawn_local(worker1.clone().polling());
         tokio::task::spawn_local(worker2.clone().polling());

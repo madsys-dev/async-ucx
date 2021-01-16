@@ -55,7 +55,11 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(config: &Config) -> Rc<Self> {
+    pub fn new() -> Rc<Self> {
+        Self::new_with_config(&Config::default())
+    }
+
+    pub fn new_with_config(config: &Config) -> Rc<Self> {
         let params = ucp_params_t {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
