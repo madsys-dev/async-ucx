@@ -1,18 +1,20 @@
 [package]
-name = "tokio-ucx"
+name = "async-ucx"
 version = "0.1.0"
 authors = ["Runji Wang <wangrunji0408@163.com>"]
 edition = "2018"
+description = "Async Rust bindings to OpenUCX."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 ucx-sys = { path = "ucx-sys" }
-tokio = { version = "1", features = ["rt"] }
 os_socketaddr = "0.1"
 futures = "0.3"
+futures-lite = "1.11"
 lazy_static = "1.4"
 log = "0.4"
 
 [dev-dependencies]
 env_logger = "0.8"
+tokio = { version = "1.0", features = ["rt", "time", "macros", "sync"] }

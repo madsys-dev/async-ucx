@@ -137,14 +137,12 @@ impl Worker {
         })
     }
 
-    // Spawn a local future to make progress on the worker.
-    pub fn spawn_polling(self: Rc<Self>) {
-        tokio::task::spawn_local(async move {
-            while Rc::strong_count(&self) > 1 {
-                while self.progress() != 0 {}
-                tokio::task::yield_now().await;
-            }
-        });
+    // Make progress on the worker.
+    pub async fn polling(self: Rc<Self>) {
+        while Rc::strong_count(&self) > 1 {
+            while self.progress() != 0 {}
+            futures_lite::future::yield_now().await;
+        }
     }
 
     pub fn print_to_stderr(&self) {
@@ -315,6 +313,7 @@ impl Listener {
         let handle = &mut Rc::get_mut(&mut listener).unwrap().handle;
         let status = unsafe { ucp_listener_create(worker.handle, &params, handle) };
         assert_eq!(status, ucs_status_t::UCS_OK);
+        trace!("create listener={:?}", handle);
         listener
     }
 
@@ -348,6 +347,7 @@ impl Listener {
 
 impl Drop for Listener {
     fn drop(&mut self) {
+        trace!("destroy listener={:?}", self.handle);
         unsafe { ucp_listener_destroy(self.handle) }
     }
 }
@@ -595,25 +595,27 @@ extern "C" {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn new() {
-        let config = Config::default();
-        let context = Context::new(&config);
-        let worker1 = context.create_worker();
-        let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
-        let listen_port = listener.socket_addr().port();
-
-        std::thread::spawn(move || loop {
-            worker1.wait();
-            worker1.progress();
+    #[test]
+    fn new() {
+        env_logger::init();
+        let (sender, recver) = tokio::sync::oneshot::channel();
+        let f1 = spawn_thread!(async move {
+            let context = Context::new(&Config::default());
+            let worker1 = context.create_worker();
+            tokio::task::spawn_local(worker1.clone().polling());
+            let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
+            let listen_port = listener.socket_addr().port();
+            sender.send(listen_port).unwrap();
+            let _endpoint1 = listener.accept().await;
         });
-        std::thread::spawn(move || {
+        spawn_thread!(async move {
+            let context = Context::new(&Config::default());
             let worker2 = context.create_worker();
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+            let listen_port = recver.await.unwrap();
             addr.set_port(listen_port);
-            let _endpoint = worker2.create_endpoint(addr);
+            let _endpoint2 = worker2.create_endpoint(addr);
         });
-
-        let _endpoint = listener.accept().await;
+        f1.join().unwrap();
     }
 }

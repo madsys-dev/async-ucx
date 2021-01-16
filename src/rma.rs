@@ -167,18 +167,8 @@ mod tests {
         let worker1 = context1.create_worker();
         let context2 = Context::new(&Config::default());
         let worker2 = context2.create_worker();
-        std::thread::spawn({
-            let worker1 = worker1.clone();
-            move || loop {
-                worker1.progress();
-            }
-        });
-        std::thread::spawn({
-            let worker2 = worker2.clone();
-            move || loop {
-                worker2.progress();
-            }
-        });
+        tokio::task::spawn_local(worker1.clone().polling());
+        tokio::task::spawn_local(worker2.clone().polling());
 
         // connect with each other
         let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
