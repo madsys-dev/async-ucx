@@ -2,16 +2,17 @@ use super::*;
 use std::io::{IoSlice, IoSliceMut};
 
 impl Worker {
-    pub fn tag_recv(&self, tag: u64, buf: &mut [MaybeUninit<u8>]) -> TagRequest {
-        self.tag_recv_mask(tag, u64::max_value(), buf)
+    pub async fn tag_recv(&self, tag: u64, buf: &mut [MaybeUninit<u8>]) -> usize {
+        let (_, len) = self.tag_recv_mask(tag, u64::max_value(), buf).await;
+        len
     }
 
-    pub fn tag_recv_mask(
+    pub async fn tag_recv_mask(
         &self,
         tag: u64,
         tag_mask: u64,
         buf: &mut [MaybeUninit<u8>],
-    ) -> TagRequest {
+    ) -> (u64, usize) {
         trace!(
             "tag_recv: worker={:?}, tag={}, mask={:#x} len={}",
             self.handle,
@@ -46,13 +47,17 @@ impl Worker {
             )
         };
         if UCS_PTR_IS_PTR(status) {
-            TagRequest { status }
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_tag,
+            }
+            .await
         } else {
             panic!("failed to recv tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
     }
 
-    pub fn tag_recv_vectored(&self, tag: u64, iov: &mut [IoSliceMut<'_>]) -> TagRequest {
+    pub async fn tag_recv_vectored(&self, tag: u64, iov: &mut [IoSliceMut<'_>]) -> usize {
         trace!(
             "tag_recv_vectored: worker={:?} iov.len={}",
             self.handle,
@@ -85,7 +90,12 @@ impl Worker {
             )
         };
         if UCS_PTR_IS_PTR(status) {
-            TagRequest { status }
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_tag,
+            }
+            .await
+            .1
         } else {
             panic!("failed to recv tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
@@ -93,7 +103,7 @@ impl Worker {
 }
 
 impl Endpoint {
-    pub fn tag_send(&self, tag: u64, buf: &[u8]) -> RequestHandle {
+    pub async fn tag_send(&self, tag: u64, buf: &[u8]) -> usize {
         trace!("tag_send: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
             trace!("tag_send: complete. req={:?}, status={:?}", request, status);
@@ -112,15 +122,19 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("tag_send: complete");
-            RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Send(status, buf.len())
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_normal,
+            }
+            .await;
         } else {
             panic!("failed to send tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
+        buf.len()
     }
 
-    pub fn tag_send_vectored(&self, tag: u64, iov: &[IoSlice<'_>]) -> RequestHandle {
+    pub async fn tag_send_vectored(&self, tag: u64, iov: &[IoSlice<'_>]) -> usize {
         trace!(
             "tag_send_vectored: endpoint={:?} iov.len={}",
             self.handle,
@@ -148,50 +162,25 @@ impl Endpoint {
         let total_len = iov.iter().map(|v| v.len()).sum();
         if status.is_null() {
             trace!("tag_send_vectored: complete");
-            RequestHandle::Ready(total_len)
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Send(status, total_len)
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_normal,
+            }
+            .await;
         } else {
             panic!("failed to send tag: {:?}", UCS_PTR_RAW_STATUS(status));
         }
+        total_len
     }
 }
 
-pub struct TagRequest {
-    status: ucs_status_ptr_t,
-}
-
-impl TagRequest {
-    fn test(&self) -> Poll<(u64, usize)> {
-        let mut info = MaybeUninit::<ucp_tag_recv_info>::uninit();
-        let status = unsafe { ucp_tag_recv_request_test(self.status as _, info.as_mut_ptr() as _) };
-        if status == ucs_status_t::UCS_INPROGRESS {
-            return Poll::Pending;
-        }
-        let info = unsafe { info.assume_init() };
-        Poll::Ready((info.sender_tag, info.length as usize))
+fn poll_tag(ptr: ucs_status_ptr_t) -> Poll<(u64, usize)> {
+    let mut info = MaybeUninit::<ucp_tag_recv_info>::uninit();
+    let status = unsafe { ucp_tag_recv_request_test(ptr as _, info.as_mut_ptr() as _) };
+    if status == ucs_status_t::UCS_INPROGRESS {
+        return Poll::Pending;
     }
-
-    fn register_waker(&mut self, waker: &Waker) {
-        unsafe { &mut *(self.status as *mut Request) }
-            .waker
-            .register(waker);
-    }
-}
-
-impl Future for TagRequest {
-    type Output = (u64, usize);
-    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
-        if let r @ Poll::Ready(_) = self.test() {
-            return r;
-        }
-        self.register_waker(cx.waker());
-        self.test()
-    }
-}
-
-impl Drop for TagRequest {
-    fn drop(&mut self) {
-        unsafe { ucp_request_free(self.status as _) };
-    }
+    let info = unsafe { info.assume_init() };
+    Poll::Ready((info.sender_tag, info.length as usize))
 }

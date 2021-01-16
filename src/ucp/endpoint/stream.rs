@@ -1,7 +1,7 @@
 use super::*;
 
 impl Endpoint {
-    pub fn stream_send(&self, buf: &[u8]) -> RequestHandle {
+    pub async fn stream_send(&self, buf: &[u8]) -> usize {
         trace!("stream_send: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
             trace!(
@@ -24,15 +24,19 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("stream_send: complete");
-            RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Send(status, buf.len())
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_normal,
+            }
+            .await;
         } else {
             panic!("failed to send stream: {:?}", UCS_PTR_RAW_STATUS(status));
         }
+        buf.len()
     }
 
-    pub fn stream_recv(&self, buf: &mut [MaybeUninit<u8>]) -> RequestHandle {
+    pub async fn stream_recv(&self, buf: &mut [MaybeUninit<u8>]) -> usize {
         trace!("stream_recv: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t, length: u64) {
             trace!(
@@ -59,11 +63,27 @@ impl Endpoint {
         if status.is_null() {
             let length = unsafe { length.assume_init() } as usize;
             trace!("stream_recv: complete. len={}", length);
-            RequestHandle::Ready(length)
+            length
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Stream(status)
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_stream,
+            }
+            .await
         } else {
             panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
+    }
+}
+
+fn poll_stream(ptr: ucs_status_ptr_t) -> Poll<usize> {
+    unsafe {
+        let mut len = MaybeUninit::<usize>::uninit();
+        let status = ucp_stream_recv_request_test(ptr as _, len.as_mut_ptr() as _);
+        if status == ucs_status_t::UCS_INPROGRESS {
+            Poll::Pending
+        } else {
+            Poll::Ready(len.assume_init())
         }
     }
 }

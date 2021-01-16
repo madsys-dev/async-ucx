@@ -2,7 +2,7 @@ use super::*;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::task::{Poll, Waker};
+use std::task::Poll;
 
 mod rma;
 mod stream;
@@ -83,67 +83,37 @@ impl Drop for Endpoint {
 }
 
 /// A handle to the request returned from async IO functions.
-pub enum RequestHandle {
-    Ready(usize),
-    Send(ucs_status_ptr_t, usize),
-    Stream(ucs_status_ptr_t),
+struct RequestHandle<T> {
+    ptr: ucs_status_ptr_t,
+    poll_fn: fn(ucs_status_ptr_t) -> Poll<T>,
 }
 
-impl RequestHandle {
-    fn test(&self) -> Poll<usize> {
-        match *self {
-            RequestHandle::Ready(len) => Poll::Ready(len),
-            RequestHandle::Send(ptr, len) => unsafe {
-                let status = ucp_request_check_status(ptr as _);
-                if status == ucs_status_t::UCS_INPROGRESS {
-                    Poll::Pending
-                } else {
-                    Poll::Ready(len)
-                }
-            },
-            RequestHandle::Stream(ptr) => unsafe {
-                let mut len = MaybeUninit::<usize>::uninit();
-                let status = ucp_stream_recv_request_test(ptr as _, len.as_mut_ptr() as _);
-                if status == ucs_status_t::UCS_INPROGRESS {
-                    Poll::Pending
-                } else {
-                    Poll::Ready(len.assume_init())
-                }
-            },
+impl<T> Future for RequestHandle<T> {
+    type Output = T;
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
+        if let ret @ Poll::Ready(_) = (self.poll_fn)(self.ptr) {
+            return ret;
         }
-    }
-
-    fn register_waker(&mut self, waker: &Waker) {
-        let ptr = *match self {
-            RequestHandle::Ready(_) => unreachable!(),
-            RequestHandle::Send(ptr, _) => ptr,
-            RequestHandle::Stream(ptr) => ptr,
-        };
-        unsafe { &mut *(ptr as *mut Request) }.waker.register(waker);
+        let request = unsafe { &mut *(self.ptr as *mut Request) };
+        request.waker.register(cx.waker());
+        (self.poll_fn)(self.ptr)
     }
 }
 
-impl Future for RequestHandle {
-    type Output = usize;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
-        if let Poll::Ready(len) = self.test() {
-            return Poll::Ready(len);
-        }
-        self.register_waker(cx.waker());
-        self.test()
-    }
-}
-
-impl Drop for RequestHandle {
+impl<T> Drop for RequestHandle<T> {
     fn drop(&mut self) {
-        let ptr = match *self {
-            RequestHandle::Ready(_) => None,
-            RequestHandle::Send(ptr, _) => Some(ptr),
-            RequestHandle::Stream(ptr) => Some(ptr),
-        };
-        if let Some(ptr) = ptr {
-            trace!("request free: {:?}", ptr);
-            unsafe { ucp_request_free(ptr as _) };
+        trace!("request free: {:?}", self.ptr);
+        unsafe { ucp_request_free(self.ptr as _) };
+    }
+}
+
+fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<()> {
+    unsafe {
+        let status = ucp_request_check_status(ptr as _);
+        if status == ucs_status_t::UCS_INPROGRESS {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
         }
     }
 }

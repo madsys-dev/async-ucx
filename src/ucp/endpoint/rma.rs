@@ -101,7 +101,7 @@ impl Drop for RKey {
 }
 
 impl Endpoint {
-    pub fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) -> RequestHandle {
+    pub async fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) {
         trace!("put: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
             trace!("put: complete. req={:?}, status={:?}", request, status);
@@ -120,15 +120,18 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("put: complete.");
-            RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Send(status, buf.len())
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_normal,
+            }
+            .await;
         } else {
             panic!("failed to put: {:?}", UCS_PTR_RAW_STATUS(status));
         }
     }
 
-    pub fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) -> RequestHandle {
+    pub async fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) {
         trace!("get: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
             trace!("get: complete. req={:?}, status={:?}", request, status);
@@ -147,9 +150,12 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("get: complete.");
-            RequestHandle::Ready(buf.len())
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle::Send(status, buf.len())
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_normal,
+            }
+            .await;
         } else {
             panic!("failed to get: {:?}", UCS_PTR_RAW_STATUS(status));
         }
