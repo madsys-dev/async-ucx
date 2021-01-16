@@ -110,20 +110,20 @@ mod tests {
         let (sender, recver) = tokio::sync::oneshot::channel();
         let f1 = spawn_thread!(async move {
             let context = Context::new(&Config::default());
-            let worker1 = context.create_worker();
-            tokio::task::spawn_local(worker1.clone().polling());
-            let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
+            let worker = context.create_worker();
+            tokio::task::spawn_local(worker.clone().polling());
+            let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
             let listen_port = listener.socket_addr().port();
             sender.send(listen_port).unwrap();
-            let _endpoint1 = listener.accept().await;
+            let _endpoint = listener.accept().await;
         });
         spawn_thread!(async move {
             let context = Context::new(&Config::default());
-            let worker2 = context.create_worker();
+            let worker = context.create_worker();
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
             let listen_port = recver.await.unwrap();
             addr.set_port(listen_port);
-            let _endpoint2 = worker2.create_endpoint(addr);
+            let _endpoint = worker.create_endpoint(addr);
         });
         f1.join().unwrap();
     }

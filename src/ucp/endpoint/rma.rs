@@ -165,10 +165,12 @@ impl Endpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
-    async fn put_get() {
-        env_logger::init();
+    #[test]
+    fn put_get() {
+        spawn_thread!(_put_get()).join().unwrap();
+    }
 
+    async fn _put_get() {
         let context1 = Context::new(&Config::default());
         let worker1 = context1.create_worker();
         let context2 = Context::new(&Config::default());
