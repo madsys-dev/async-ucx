@@ -57,17 +57,45 @@ impl Endpoint {
     }
 
     /// This routine flushes all outstanding AMO and RMA communications on the endpoint.
-    pub fn flush(&self) {
-        let status = unsafe { ucp_ep_flush(self.handle) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
-    }
-
-    /// This routine flushes all outstanding AMO and RMA communications on the endpoint.
-    pub fn flush_begin(&self) {
+    pub async fn flush(&self) {
+        trace!("flush: endpoint={:?}", self.handle);
         unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
+            trace!("flush: complete");
             ucp_request_free(request);
         }
-        unsafe { ucp_ep_flush_nb(self.handle, 0, Some(callback)) };
+        let status = unsafe { ucp_ep_flush_nb(self.handle, 0, Some(callback)) };
+        if status.is_null() {
+            trace!("flush: complete");
+        } else if UCS_PTR_IS_PTR(status) {
+            RequestHandle {
+                ptr: status,
+                poll_fn: poll_normal,
+            }
+            .await;
+        } else {
+            panic!("failed to flush endpoint: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
+    }
+
+    /// This routine releases the endpoint.
+    pub async fn close(self) {
+        trace!("close: endpoint={:?}", self.handle);
+        let status = unsafe {
+            ucp_ep_close_nb(
+                self.handle,
+                ucp_ep_close_mode::UCP_EP_CLOSE_MODE_FLUSH as u32,
+            )
+        };
+        if status.is_null() {
+            trace!("close: complete");
+        } else if UCS_PTR_IS_PTR(status) {
+            while poll_normal(status).is_pending() {
+                futures_lite::future::yield_now().await;
+            }
+        } else {
+            panic!("failed to close endpoint: {:?}", UCS_PTR_RAW_STATUS(status));
+        }
+        std::mem::forget(self);
     }
 
     pub fn worker(&self) -> &Rc<Worker> {
