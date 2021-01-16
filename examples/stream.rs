@@ -14,8 +14,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-const HELLO: &str = "Hello!";
-
 async fn client(server_addr: String) -> Result<()> {
     println!("client: connect to {:?}", server_addr);
     let context = Context::new();
@@ -23,12 +21,9 @@ async fn client(server_addr: String) -> Result<()> {
     tokio::task::spawn_local(worker.clone().polling());
 
     let endpoint = worker.create_endpoint(server_addr.parse().unwrap());
+    endpoint.print_to_stderr();
 
-    println!("send: {:?}", HELLO);
-    endpoint.tag_send(100, HELLO.as_bytes()).await;
-
-    let long_msg: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
-    endpoint.tag_send(101, &long_msg).await;
+    endpoint.stream_send(b"Hello!").await;
     Ok(())
 }
 
@@ -40,19 +35,13 @@ async fn server() -> Result<()> {
 
     let listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
     println!("listening on {}", listener.socket_addr());
-    let _endpoint = listener.accept().await;
+    let endpoint = listener.accept().await;
     println!("accept");
+    endpoint.print_to_stderr();
 
-    let mut buf = [MaybeUninit::uninit(); 0x1005];
-    let len = worker.tag_recv(100, &mut buf).await;
-    let msg = std::str::from_utf8(unsafe { transmute(&buf[..len]) }).unwrap();
+    let mut buf = [MaybeUninit::uninit(); 10];
+    let len = endpoint.stream_recv(&mut buf).await;
+    let msg = std::str::from_utf8(unsafe { transmute(&buf[..len]) });
     println!("recv: {:?}", msg);
-    assert_eq!(msg, HELLO);
-
-    let len = worker.tag_recv(101, &mut buf).await;
-    println!("recv long message, len={}", len);
-    let msg: &[u8] = unsafe { transmute(&buf[..len]) };
-    let long_msg: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
-    assert_eq!(msg, long_msg.as_slice());
     Ok(())
 }
