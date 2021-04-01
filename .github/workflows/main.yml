@@ -25,9 +25,9 @@ jobs:
     - name: Install UCX
       run: |
         sudo apt install libnuma-dev
-        wget https://github.com/openucx/ucx/releases/download/v1.9.0/ucx-1.9.0.tar.gz
-        tar xf ucx-1.9.0.tar.gz
-        cd ucx-1.9.0 && mkdir build && cd build
+        wget https://github.com/openucx/ucx/releases/download/v1.10.0/ucx-1.10.0.tar.gz
+        tar xf ucx-1.10.0.tar.gz
+        cd ucx-1.10.0 && mkdir build && cd build
         ../configure && make -j && sudo make install -j
     - name: Build
       uses: actions-rs/cargo@v1
