@@ -77,8 +77,12 @@ impl Worker {
         Listener::new(self, addr)
     }
 
-    pub fn create_endpoint(self: &Rc<Self>, addr: SocketAddr) -> Rc<Endpoint> {
-        Endpoint::new(self, addr)
+    pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Rc<Endpoint> {
+        Endpoint::connect(self, addr)
+    }
+
+    pub fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Rc<Endpoint> {
+        Endpoint::accept(self, connection)
     }
 
     /// Waits (blocking) until an event has happened.

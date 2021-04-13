@@ -22,7 +22,7 @@ async fn client(server_addr: String) -> ! {
     let worker = context.create_worker();
     tokio::task::spawn_local(worker.clone().polling());
 
-    let endpoint = worker.create_endpoint(server_addr.parse().unwrap());
+    let endpoint = worker.connect(server_addr.parse().unwrap());
     endpoint.print_to_stderr();
 
     let mut id = [MaybeUninit::uninit()];
@@ -57,7 +57,8 @@ async fn server() -> ! {
     println!("listening on {}", listener.socket_addr());
 
     for i in 0u8.. {
-        let ep = listener.accept().await;
+        let conn = listener.next().await;
+        let ep = worker.accept(conn);
         println!("accept {}", i);
         ep.tag_send(100, &[i]).await;
         tokio::task::spawn_local(async move {

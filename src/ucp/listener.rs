@@ -15,21 +15,36 @@ pub struct Listener {
 
 #[derive(Debug, Default)]
 struct Queue {
-    items: VecDeque<Rc<Endpoint>>,
+    items: VecDeque<ConnectionRequest>,
     wakers: Vec<Waker>,
+}
+
+#[derive(Debug)]
+#[must_use = "connection must be accepted or rejected"]
+pub struct ConnectionRequest {
+    pub(super) handle: ucp_conn_request_h,
+    listener: Rc<Listener>,
+}
+
+impl ConnectionRequest {
+    /// Reject the connection.
+    pub fn reject(self) {
+        let status = unsafe { ucp_listener_reject(self.listener.handle, self.handle) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+    }
 }
 
 impl Listener {
     pub(super) fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Rc<Self> {
-        unsafe extern "C" fn accept_handler(ep: ucp_ep_h, arg: *mut c_void) {
-            trace!("accept endpoint={:?}", ep);
+        unsafe extern "C" fn connect_handler(conn_request: ucp_conn_request_h, arg: *mut c_void) {
+            trace!("connect request={:?}", conn_request);
             let listener = ManuallyDrop::new(Rc::from_raw(arg as *const Listener));
-            let endpoint = Rc::new(Endpoint {
-                handle: ep,
-                worker: listener.worker.clone(),
-            });
+            let connection = ConnectionRequest {
+                handle: conn_request,
+                listener: (*listener).clone(),
+            };
             let mut incomings = listener.incomings.lock().unwrap();
-            incomings.items.push_back(endpoint);
+            incomings.items.push_back(connection);
             for waker in incomings.wakers.drain(..) {
                 waker.wake();
             }
@@ -43,19 +58,19 @@ impl Listener {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         let params = ucp_listener_params_t {
             field_mask: (ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_SOCK_ADDR
-                | ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_ACCEPT_HANDLER)
+                | ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_CONN_HANDLER)
                 .0 as u64,
             sockaddr: ucs_sock_addr {
                 addr: sockaddr.as_ptr() as _,
                 addrlen: sockaddr.len(),
             },
             accept_handler: ucp_listener_accept_handler_t {
-                cb: Some(accept_handler),
-                arg: listener.as_ref() as *const Self as _,
-            },
-            conn_handler: ucp_listener_conn_handler_t {
                 cb: None,
                 arg: null_mut(),
+            },
+            conn_handler: ucp_listener_conn_handler_t {
+                cb: Some(connect_handler),
+                arg: listener.as_ref() as *const Self as _,
             },
         };
         let handle = &mut Rc::get_mut(&mut listener).unwrap().handle;
@@ -79,11 +94,11 @@ impl Listener {
         sockaddr.into_addr().unwrap()
     }
 
-    pub async fn accept(&self) -> Rc<Endpoint> {
+    pub async fn next(&self) -> ConnectionRequest {
         poll_fn(|cx| {
             let mut incomings = self.incomings.lock().unwrap();
-            if let Some(endpoint) = incomings.items.pop_front() {
-                Poll::Ready(endpoint)
+            if let Some(connection) = incomings.items.pop_front() {
+                Poll::Ready(connection)
             } else {
                 incomings.wakers.push(cx.waker().clone());
                 Poll::Pending

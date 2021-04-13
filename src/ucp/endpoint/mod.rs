@@ -19,8 +19,9 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    pub(super) fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Rc<Self> {
+    pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Rc<Self> {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
+        #[allow(invalid_value)]
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
                 | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR)
@@ -30,17 +31,22 @@ impl Endpoint {
                 addr: sockaddr.as_ptr() as _,
                 addrlen: sockaddr.len(),
             },
-            // set NONE to enable TCP
-            // ref: https://github.com/rapidsai/ucx-py/issues/194#issuecomment-535726896
-            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_NONE,
-            err_handler: ucp_err_handler {
-                cb: None,
-                arg: null_mut(),
-            },
-            user_data: null_mut(),
-            address: null_mut(),
-            conn_request: null_mut(),
+            ..unsafe { MaybeUninit::uninit().assume_init() }
         };
+        Endpoint::create(worker, params)
+    }
+
+    pub(super) fn accept(worker: &Rc<Worker>, connection: ConnectionRequest) -> Rc<Self> {
+        #[allow(invalid_value)]
+        let params = ucp_ep_params {
+            field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST.0 as u64,
+            conn_request: connection.handle,
+            ..unsafe { MaybeUninit::uninit().assume_init() }
+        };
+        Endpoint::create(worker, params)
+    }
+
+    fn create(worker: &Rc<Worker>, params: ucp_ep_params) -> Rc<Self> {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
