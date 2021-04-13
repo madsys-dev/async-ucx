@@ -23,14 +23,24 @@ struct Queue {
 #[must_use = "connection must be accepted or rejected"]
 pub struct ConnectionRequest {
     pub(super) handle: ucp_conn_request_h,
-    listener: Rc<Listener>,
 }
 
+// connection can be send to other thread and accepted on its worker
+unsafe impl Send for ConnectionRequest {}
+
 impl ConnectionRequest {
-    /// Reject the connection.
-    pub fn reject(self) {
-        let status = unsafe { ucp_listener_reject(self.listener.handle, self.handle) };
+    /// The address of the remote client that sent the connection request to the server.
+    pub fn remote_addr(&self) -> SocketAddr {
+        let mut attr = MaybeUninit::<ucp_conn_request_attr>::uninit();
+        unsafe { &mut *attr.as_mut_ptr() }.field_mask =
+            ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR.0 as u64;
+        let status = unsafe { ucp_conn_request_query(self.handle, attr.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
+        let attr = unsafe { attr.assume_init() };
+        let sockaddr = unsafe {
+            os_socketaddr::OsSocketAddr::from_raw_parts(&attr.client_address as *const _ as _, 8)
+        };
+        sockaddr.into_addr().unwrap()
     }
 }
 
@@ -41,7 +51,6 @@ impl Listener {
             let listener = ManuallyDrop::new(Rc::from_raw(arg as *const Listener));
             let connection = ConnectionRequest {
                 handle: conn_request,
-                listener: (*listener).clone(),
             };
             let mut incomings = listener.incomings.lock().unwrap();
             incomings.items.push_back(connection);
@@ -105,6 +114,12 @@ impl Listener {
             }
         })
         .await
+    }
+
+    /// Reject a connection.
+    pub fn reject(&self, conn: ConnectionRequest) {
+        let status = unsafe { ucp_listener_reject(self.handle, conn.handle) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
     }
 }
 

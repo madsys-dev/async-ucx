@@ -6,6 +6,7 @@ use std::mem::MaybeUninit;
 use std::os::raw::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
+use std::sync::Arc;
 use ucx_sys::*;
 
 mod endpoint;
@@ -60,19 +61,24 @@ pub struct Context {
     handle: ucp_context_h,
 }
 
+// Context is thread safe.
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
+
 impl Context {
     /// Creates and initializes a UCP application context with default configuration.
-    pub fn new() -> Rc<Self> {
+    pub fn new() -> Arc<Self> {
         Self::new_with_config(&Config::default())
     }
 
     /// Creates and initializes a UCP application context with specified configuration.
-    pub fn new_with_config(config: &Config) -> Rc<Self> {
+    pub fn new_with_config(config: &Config) -> Arc<Self> {
         let params = ucp_params_t {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_INIT
-                | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP)
+                | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP
+                | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
             features: (ucp_feature::UCP_FEATURE_RMA
                 | ucp_feature::UCP_FEATURE_TAG
@@ -83,7 +89,7 @@ impl Context {
             request_init: Some(Request::init),
             request_cleanup: Some(Request::cleanup),
             tag_sender_mask: 0,
-            mt_workers_shared: 0,
+            mt_workers_shared: 1,
             estimated_num_eps: 0,
             estimated_num_ppn: 0,
         };
@@ -98,14 +104,36 @@ impl Context {
             )
         };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        Rc::new(Context {
+        Arc::new(Context {
             handle: unsafe { handle.assume_init() },
         })
     }
 
     /// Create a `Worker` object.
-    pub fn create_worker(self: &Rc<Self>) -> Rc<Worker> {
+    pub fn create_worker(self: &Arc<Self>) -> Rc<Worker> {
         Worker::new(self)
+    }
+
+    /// Prints information about the context configuration.
+    ///
+    /// Including memory domains, transport resources, and
+    /// other useful information associated with the context.
+    pub fn print_to_stderr(&self) {
+        unsafe { ucp_context_print_info(self.handle, stderr) };
+    }
+
+    /// Fetches information about the context.
+    pub fn query(&self) -> ucp_context_attr {
+        let mut attr = MaybeUninit::<ucp_context_attr>::uninit();
+        unsafe { &mut *attr.as_mut_ptr() }.field_mask =
+            (ucp_context_attr_field::UCP_ATTR_FIELD_REQUEST_SIZE
+                | ucp_context_attr_field::UCP_ATTR_FIELD_THREAD_MODE
+                | ucp_context_attr_field::UCP_ATTR_FIELD_MEMORY_TYPES)
+                .0 as u64;
+        let status = unsafe { ucp_context_query(self.handle, attr.as_mut_ptr()) };
+        assert_eq!(status, ucs_status_t::UCS_OK);
+        let attr = unsafe { attr.assume_init() };
+        attr
     }
 }
 

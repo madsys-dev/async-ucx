@@ -6,7 +6,7 @@ use std::os::unix::io::AsRawFd;
 #[derive(Debug)]
 pub struct Worker {
     pub(super) handle: ucp_worker_h,
-    context: Rc<Context>,
+    context: Arc<Context>,
 }
 
 impl Drop for Worker {
@@ -16,7 +16,7 @@ impl Drop for Worker {
 }
 
 impl Worker {
-    pub(super) fn new(context: &Rc<Context>) -> Rc<Self> {
+    pub(super) fn new(context: &Arc<Context>) -> Rc<Self> {
         let mut params = MaybeUninit::<ucp_worker_params_t>::uninit();
         unsafe { (*params.as_mut_ptr()).field_mask = 0 };
         let mut handle = MaybeUninit::uninit();
