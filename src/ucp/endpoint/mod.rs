@@ -19,7 +19,7 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Rc<Self> {
+    pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Self {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         #[allow(invalid_value)]
         let params = ucp_ep_params {
@@ -36,7 +36,7 @@ impl Endpoint {
         Endpoint::create(worker, params)
     }
 
-    pub(super) fn accept(worker: &Rc<Worker>, connection: ConnectionRequest) -> Rc<Self> {
+    pub(super) fn accept(worker: &Rc<Worker>, connection: ConnectionRequest) -> Self {
         #[allow(invalid_value)]
         let params = ucp_ep_params {
             field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST.0 as u64,
@@ -46,16 +46,16 @@ impl Endpoint {
         Endpoint::create(worker, params)
     }
 
-    fn create(worker: &Rc<Worker>, params: ucp_ep_params) -> Rc<Self> {
+    fn create(worker: &Rc<Worker>, params: ucp_ep_params) -> Self {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         let handle = unsafe { handle.assume_init() };
         trace!("create endpoint={:?}", handle);
-        Rc::new(Endpoint {
+        Endpoint {
             handle,
             worker: worker.clone(),
-        })
+        }
     }
 
     pub fn print_to_stderr(&self) {

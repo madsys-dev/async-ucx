@@ -1,16 +1,16 @@
 use super::*;
 use futures::future::poll_fn;
+use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::net::SocketAddr;
-use std::sync::Mutex;
+use std::pin::Pin;
 use std::task::{Poll, Waker};
 
 #[derive(Debug)]
 pub struct Listener {
     handle: ucp_listener_h,
-    incomings: Mutex<Queue>,
-    worker: Rc<Worker>,
+    incomings: Pin<Rc<RefCell<Queue>>>,
 }
 
 #[derive(Debug, Default)]
@@ -45,25 +45,19 @@ impl ConnectionRequest {
 }
 
 impl Listener {
-    pub(super) fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Rc<Self> {
+    pub(super) fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Self {
         unsafe extern "C" fn connect_handler(conn_request: ucp_conn_request_h, arg: *mut c_void) {
             trace!("connect request={:?}", conn_request);
-            let listener = ManuallyDrop::new(Rc::from_raw(arg as *const Listener));
+            let mut incomings = (*(arg as *const RefCell<Queue>)).borrow_mut();
             let connection = ConnectionRequest {
                 handle: conn_request,
             };
-            let mut incomings = listener.incomings.lock().unwrap();
             incomings.items.push_back(connection);
             for waker in incomings.wakers.drain(..) {
                 waker.wake();
             }
         }
-        #[allow(clippy::uninit_assumed_init)]
-        let mut listener = Rc::new(Listener {
-            handle: unsafe { MaybeUninit::uninit().assume_init() },
-            incomings: Mutex::default(),
-            worker: worker.clone(),
-        });
+        let incomings = Rc::pin(RefCell::new(Queue::default()));
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         let params = ucp_listener_params_t {
             field_mask: (ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_SOCK_ADDR
@@ -79,14 +73,17 @@ impl Listener {
             },
             conn_handler: ucp_listener_conn_handler_t {
                 cb: Some(connect_handler),
-                arg: listener.as_ref() as *const Self as _,
+                arg: &*incomings as *const RefCell<Queue> as _,
             },
         };
-        let handle = &mut Rc::get_mut(&mut listener).unwrap().handle;
-        let status = unsafe { ucp_listener_create(worker.handle, &params, handle) };
+        let mut handle = MaybeUninit::uninit();
+        let status = unsafe { ucp_listener_create(worker.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         trace!("create listener={:?}", handle);
-        listener
+        Listener {
+            handle: unsafe { handle.assume_init() },
+            incomings,
+        }
     }
 
     pub fn socket_addr(&self) -> SocketAddr {
@@ -105,7 +102,7 @@ impl Listener {
 
     pub async fn next(&self) -> ConnectionRequest {
         poll_fn(|cx| {
-            let mut incomings = self.incomings.lock().unwrap();
+            let mut incomings = self.incomings.borrow_mut();
             if let Some(connection) = incomings.items.pop_front() {
                 Poll::Ready(connection)
             } else {

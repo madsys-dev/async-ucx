@@ -73,15 +73,15 @@ impl Worker {
         }
     }
 
-    pub fn create_listener(self: &Rc<Self>, addr: SocketAddr) -> Rc<Listener> {
+    pub fn create_listener(self: &Rc<Self>, addr: SocketAddr) -> Listener {
         Listener::new(self, addr)
     }
 
-    pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Rc<Endpoint> {
+    pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Endpoint {
         Endpoint::connect(self, addr)
     }
 
-    pub fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Rc<Endpoint> {
+    pub fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Endpoint {
         Endpoint::accept(self, connection)
     }
 
