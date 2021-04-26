@@ -3,11 +3,11 @@ use super::*;
 #[derive(Debug)]
 pub struct MemoryHandle {
     handle: ucp_mem_h,
-    context: Rc<Context>,
+    context: Arc<Context>,
 }
 
 impl MemoryHandle {
-    pub fn register(context: &Rc<Context>, region: &mut [u8]) -> Self {
+    pub fn register(context: &Arc<Context>, region: &mut [u8]) -> Self {
         let params = ucp_mem_map_params_t {
             field_mask: (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS
                 | ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH)
@@ -185,8 +185,9 @@ mod tests {
         let listen_port = listener.socket_addr().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let endpoint2 = worker2.create_endpoint(addr);
-        let _endpoint1 = listener.accept().await;
+        let endpoint2 = worker2.connect(addr);
+        let conn1 = listener.next().await;
+        let _endpoint1 = worker1.accept(conn1);
 
         let mut buf1: Vec<u8> = vec![0; 0x1000];
         let mut buf2: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();

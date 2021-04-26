@@ -4,7 +4,6 @@ use std::hash::{Hash, Hasher};
 use std::io::Result;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::sync::atomic::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -102,10 +101,7 @@ struct WorkerThread {
 }
 
 impl WorkerThread {
-    fn new(
-        context: &Arc<Context>,
-        handle_ep: fn(Rc<Endpoint>, SocketAddr, Arc<AtomicUsize>),
-    ) -> Self {
+    fn new(context: &Arc<Context>, handle_ep: fn(Endpoint, SocketAddr, Arc<AtomicUsize>)) -> Self {
         let context = context.clone();
         let (sender, mut recver) = mpsc::unbounded_channel::<ConnectionRequest>();
         let counter = Arc::new(AtomicUsize::new(0));

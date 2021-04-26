@@ -142,7 +142,8 @@ mod tests {
             let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
             let listen_port = listener.socket_addr().port();
             sender.send(listen_port).unwrap();
-            let _endpoint = listener.accept().await;
+            let conn = listener.next().await;
+            let _endpoint = worker.accept(conn);
         });
         spawn_thread!(async move {
             let context = Context::new();
@@ -150,7 +151,7 @@ mod tests {
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
             let listen_port = recver.await.unwrap();
             addr.set_port(listen_port);
-            let _endpoint = worker.create_endpoint(addr);
+            let _endpoint = worker.connect(addr);
         });
         f1.join().unwrap();
     }
