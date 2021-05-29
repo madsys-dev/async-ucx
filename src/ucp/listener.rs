@@ -1,22 +1,14 @@
 use super::*;
-use futures::future::poll_fn;
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use futures::channel::mpsc;
+use futures::stream::StreamExt;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::task::{Poll, Waker};
 
 #[derive(Debug)]
 pub struct Listener {
     handle: ucp_listener_h,
-    incomings: Pin<Rc<RefCell<Queue>>>,
-}
-
-#[derive(Debug, Default)]
-struct Queue {
-    items: VecDeque<ConnectionRequest>,
-    wakers: Vec<Waker>,
+    sender: Rc<mpsc::UnboundedSender<ConnectionRequest>>,
+    recver: mpsc::UnboundedReceiver<ConnectionRequest>,
 }
 
 #[derive(Debug)]
@@ -48,16 +40,14 @@ impl Listener {
     pub(super) fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Self {
         unsafe extern "C" fn connect_handler(conn_request: ucp_conn_request_h, arg: *mut c_void) {
             trace!("connect request={:?}", conn_request);
-            let mut incomings = (*(arg as *const RefCell<Queue>)).borrow_mut();
+            let sender = &*(arg as *const mpsc::UnboundedSender<ConnectionRequest>);
             let connection = ConnectionRequest {
                 handle: conn_request,
             };
-            incomings.items.push_back(connection);
-            for waker in incomings.wakers.drain(..) {
-                waker.wake();
-            }
+            sender.unbounded_send(connection).unwrap();
         }
-        let incomings = Rc::pin(RefCell::new(Queue::default()));
+        let (sender, recver) = mpsc::unbounded();
+        let sender = Rc::new(sender);
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         let params = ucp_listener_params_t {
             field_mask: (ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_SOCK_ADDR
@@ -73,7 +63,7 @@ impl Listener {
             },
             conn_handler: ucp_listener_conn_handler_t {
                 cb: Some(connect_handler),
-                arg: &*incomings as *const RefCell<Queue> as _,
+                arg: &*sender as *const mpsc::UnboundedSender<ConnectionRequest> as _,
             },
         };
         let mut handle = MaybeUninit::uninit();
@@ -82,7 +72,8 @@ impl Listener {
         trace!("create listener={:?}", handle);
         Listener {
             handle: unsafe { handle.assume_init() },
-            incomings,
+            sender,
+            recver,
         }
     }
 
@@ -100,17 +91,8 @@ impl Listener {
         sockaddr.into_addr().unwrap()
     }
 
-    pub async fn next(&self) -> ConnectionRequest {
-        poll_fn(|cx| {
-            let mut incomings = self.incomings.borrow_mut();
-            if let Some(connection) = incomings.items.pop_front() {
-                Poll::Ready(connection)
-            } else {
-                incomings.wakers.push(cx.waker().clone());
-                Poll::Pending
-            }
-        })
-        .await
+    pub async fn next(&mut self) -> ConnectionRequest {
+        self.recver.next().await.unwrap()
     }
 
     /// Reject a connection.

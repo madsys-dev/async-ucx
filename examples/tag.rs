@@ -38,7 +38,7 @@ async fn server() -> Result<()> {
     let worker = context.create_worker();
     tokio::task::spawn_local(worker.clone().polling());
 
-    let listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
+    let mut listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
     println!("listening on {}", listener.socket_addr());
     let connection = listener.next().await;
     let _endpoint = worker.accept(connection);

@@ -46,7 +46,7 @@ async fn server() -> ! {
     let worker = context.create_worker();
     tokio::task::spawn_local(worker.clone().polling());
 
-    let listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
+    let mut listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
     tokio::task::spawn_local(async {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
