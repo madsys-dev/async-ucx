@@ -88,10 +88,8 @@ impl Context {
             request_size: std::mem::size_of::<Request>() as u64,
             request_init: Some(Request::init),
             request_cleanup: Some(Request::cleanup),
-            tag_sender_mask: 0,
             mt_workers_shared: 1,
-            estimated_num_eps: 0,
-            estimated_num_ppn: 0,
+            ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         let mut handle = MaybeUninit::uninit();
         let status = unsafe {
@@ -124,14 +122,15 @@ impl Context {
 
     /// Fetches information about the context.
     pub fn query(&self) -> ucp_context_attr {
-        let mut attr = MaybeUninit::<ucp_context_attr>::uninit();
-        unsafe { &mut *attr.as_mut_ptr() }.field_mask =
-            (ucp_context_attr_field::UCP_ATTR_FIELD_REQUEST_SIZE
+        #[allow(invalid_value)]
+        let mut attr = ucp_context_attr {
+            field_mask: (ucp_context_attr_field::UCP_ATTR_FIELD_REQUEST_SIZE
                 | ucp_context_attr_field::UCP_ATTR_FIELD_THREAD_MODE)
-                .0 as u64;
-        let status = unsafe { ucp_context_query(self.handle, attr.as_mut_ptr()) };
+                .0 as u64,
+            ..unsafe { MaybeUninit::uninit().assume_init() }
+        };
+        let status = unsafe { ucp_context_query(self.handle, &mut attr) };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        let attr = unsafe { attr.assume_init() };
         attr
     }
 }

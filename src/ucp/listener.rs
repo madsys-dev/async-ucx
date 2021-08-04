@@ -23,12 +23,13 @@ unsafe impl Send for ConnectionRequest {}
 impl ConnectionRequest {
     /// The address of the remote client that sent the connection request to the server.
     pub fn remote_addr(&self) -> SocketAddr {
-        let mut attr = MaybeUninit::<ucp_conn_request_attr>::uninit();
-        unsafe { &mut *attr.as_mut_ptr() }.field_mask =
-            ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR.0 as u64;
-        let status = unsafe { ucp_conn_request_query(self.handle, attr.as_mut_ptr()) };
+        let mut attr = ucp_conn_request_attr {
+            field_mask: ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR.0
+                as u64,
+            ..unsafe { MaybeUninit::uninit().assume_init() }
+        };
+        let status = unsafe { ucp_conn_request_query(self.handle, &mut attr) };
         assert_eq!(status, ucs_status_t::UCS_OK);
-        let attr = unsafe { attr.assume_init() };
         let sockaddr = unsafe {
             os_socketaddr::OsSocketAddr::from_raw_parts(&attr.client_address as *const _ as _, 8)
         };
@@ -121,7 +122,7 @@ mod tests {
             let context = Context::new();
             let worker = context.create_worker();
             tokio::task::spawn_local(worker.clone().polling());
-            let listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
+            let mut listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
             let listen_port = listener.socket_addr().port();
             sender.send(listen_port).unwrap();
             let conn = listener.next().await;

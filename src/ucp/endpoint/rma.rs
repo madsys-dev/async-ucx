@@ -8,13 +8,13 @@ pub struct MemoryHandle {
 
 impl MemoryHandle {
     pub fn register(context: &Arc<Context>, region: &mut [u8]) -> Self {
+        #[allow(invalid_value)]
         let params = ucp_mem_map_params_t {
             field_mask: (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS
                 | ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH)
                 .0 as u64,
             address: region.as_ptr() as _,
             length: region.len() as _,
-            flags: 0,
             ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         let mut handle = MaybeUninit::uninit();
@@ -180,7 +180,7 @@ mod tests {
         tokio::task::spawn_local(worker2.clone().polling());
 
         // connect with each other
-        let listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
+        let mut listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
         let listen_port = listener.socket_addr().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
