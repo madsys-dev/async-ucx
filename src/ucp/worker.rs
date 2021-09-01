@@ -8,7 +8,7 @@ use tokio::io::unix::AsyncFd;
 #[derive(Debug)]
 pub struct Worker {
     pub(super) handle: ucp_worker_h,
-    context: Arc<Context>,    
+    context: Arc<Context>,
 }
 
 impl Drop for Worker {
