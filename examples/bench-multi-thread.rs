@@ -25,7 +25,10 @@ async fn client(server_addr: String) -> ! {
 
     let context = Context::new();
     let worker = context.create_worker();
+    #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
+    #[cfg(feature = "event")]
+    tokio::task::spawn_local(worker.clone().event_poll());
 
     let endpoint = worker.connect(server_addr.parse().unwrap());
     endpoint.print_to_stderr();
@@ -75,7 +78,10 @@ async fn server() -> ! {
     }
 
     let worker = context.create_worker();
+    #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
+    #[cfg(feature = "event")]
+    tokio::task::spawn_local(worker.clone().event_poll());
 
     let mut listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
     tokio::task::spawn_local(async move {
@@ -109,10 +115,14 @@ impl WorkerThread {
         std::thread::spawn(move || {
             let worker = context.create_worker();
             let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
                 .build()
                 .unwrap();
             let local = tokio::task::LocalSet::new();
+            #[cfg(not(event))]
             local.spawn_local(worker.clone().polling());
+            #[cfg(feature = "event")]
+            local.spawn_local(worker.clone().event_poll());
             local.block_on(&rt, async move {
                 while let Some(conn) = recver.recv().await {
                     let addr = conn.remote_addr();
