@@ -20,7 +20,10 @@ async fn client(server_addr: String) -> ! {
 
     let context = Context::new();
     let worker = context.create_worker();
+    #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
+    #[cfg(feature = "event")]
+    tokio::task::spawn_local(worker.clone().event_poll());
 
     let endpoint = worker.connect(server_addr.parse().unwrap());
     endpoint.print_to_stderr();
@@ -44,7 +47,10 @@ async fn server() -> ! {
     println!("server");
     let context = Context::new();
     let worker = context.create_worker();
+    #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
+    #[cfg(feature = "event")]
+    tokio::task::spawn_local(worker.clone().event_poll());
 
     let mut listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
     tokio::task::spawn_local(async {
@@ -58,6 +64,7 @@ async fn server() -> ! {
 
     for i in 0u8.. {
         let conn = listener.next().await;
+        conn.remote_addr();
         let ep = worker.accept(conn);
         println!("accept {}", i);
         ep.tag_send(100, &[i]).await;

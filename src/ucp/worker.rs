@@ -1,6 +1,8 @@
 use super::*;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
+#[cfg(feature = "event")]
+use tokio::io::unix::AsyncFd;
 
 /// An object representing the communication context.
 #[derive(Debug)]
@@ -29,11 +31,27 @@ impl Worker {
         })
     }
 
-    // Make progress on the worker.
+    /// Make progress on the worker.
     pub async fn polling(self: Rc<Self>) {
         while Rc::strong_count(&self) > 1 {
             while self.progress() != 0 {}
             futures_lite::future::yield_now().await;
+        }
+    }
+
+    /// Wait event then make progress.
+    ///
+    /// This function register `event_fd` on tokio's event loop and wait `event_fd` become readable,
+    ////  then call progress function.
+    #[cfg(feature = "event")]
+    pub async fn event_poll(self: Rc<Self>) {
+        let wait_fd = AsyncFd::new(self.event_fd()).unwrap();
+        while Rc::strong_count(&self) > 1 {
+            while self.progress() != 0 {}
+            if self.arm() {
+                let mut ready = wait_fd.readable().await.unwrap();
+                ready.clear_ready();
+            }
         }
     }
 

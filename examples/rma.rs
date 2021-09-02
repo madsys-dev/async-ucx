@@ -20,7 +20,10 @@ async fn client(server_addr: String) -> Result<()> {
     let worker = context.create_worker();
     let endpoint = worker.connect(server_addr.parse().unwrap());
     endpoint.print_to_stderr();
+    #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
+    #[cfg(feature = "event")]
+    tokio::task::spawn_local(worker.clone().event_poll());
 
     // register memory region
     let mut buf: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
@@ -40,7 +43,10 @@ async fn server() -> Result<()> {
     let context = Context::new();
     let worker = context.create_worker();
     let mut listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
+    #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
+    #[cfg(feature = "event")]
+    tokio::task::spawn_local(worker.clone().event_poll());
     println!("listening on {}", listener.socket_addr());
     let connection = listener.next().await;
     let endpoint = worker.accept(connection);
