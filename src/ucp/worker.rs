@@ -1,14 +1,23 @@
 use super::*;
+use derivative::*;
+#[cfg(feature = "am")]
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
+#[cfg(feature = "am")]
+use std::sync::RwLock;
 #[cfg(feature = "event")]
 use tokio::io::unix::AsyncFd;
 
 /// An object representing the communication context.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Worker {
     pub(super) handle: ucp_worker_h,
     context: Arc<Context>,
+    #[cfg(feature = "am")]
+    #[derivative(Debug = "ignore")]
+    pub(crate) am_handlers: RwLock<HashMap<u32, Rc<AmHandler>>>,
 }
 
 impl Drop for Worker {
@@ -28,6 +37,8 @@ impl Worker {
         Rc::new(Worker {
             handle: unsafe { handle.assume_init() },
             context: context.clone(),
+            #[cfg(feature = "am")]
+            am_handlers: RwLock::new(HashMap::new()),
         })
     }
 
@@ -132,25 +143,6 @@ impl Worker {
         let status = unsafe { ucp_worker_get_efd(self.handle, fd.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         unsafe { fd.assume_init() }
-    }
-
-    /// Installs a user defined callback to handle incoming Active Messages with a specific id.
-    pub fn set_am_handler(&self, id: u16, arg: usize) {
-        unsafe extern "C" fn callback(
-            arg: *mut c_void,
-            data: *mut c_void,
-            length: u64,
-            _reply_ep: ucp_ep_h,
-            _flags: u32,
-        ) -> ucs_status_t {
-            trace!("active_message: arg={:?}, len={:?}", arg, length);
-            let _data = std::slice::from_raw_parts(data as *const u8, length as _);
-            // TODO: release data
-            ucs_status_t::UCS_OK
-        }
-        let status =
-            unsafe { ucp_worker_set_am_handler(self.handle, id, Some(callback), arg as _, 0) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
     }
 
     /// This routine flushes all outstanding AMO and RMA communications on the worker.

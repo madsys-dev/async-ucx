@@ -4,10 +4,14 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Poll;
 
+#[cfg(feature = "am")]
+mod am;
 mod rma;
 mod stream;
 mod tag;
 
+#[cfg(feature = "am")]
+pub use self::am::*;
 pub use self::rma::*;
 pub use self::stream::*;
 pub use self::tag::*;
