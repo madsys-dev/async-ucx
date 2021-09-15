@@ -186,7 +186,7 @@ mod tests {
         addr.set_port(listen_port);
         let endpoint2 = worker2.connect(addr);
         let conn1 = listener.next().await;
-        let _endpoint1 = worker1.accept(conn1);
+        let endpoint1 = worker1.accept(conn1);
 
         let mut buf1: Vec<u8> = vec![0; 0x1000];
         let mut buf2: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
@@ -208,5 +208,9 @@ mod tests {
             .get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2)
             .await;
         assert_eq!(&buf1[..], &buf2[..]);
+
+        // close endpoint1 & endpont2, drop them directly will cause deadlock
+        endpoint1.close().await;
+        endpoint2.close().await;
     }
 }
