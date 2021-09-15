@@ -12,6 +12,7 @@ macro_rules! spawn_thread {
                 .unwrap();
             let local = tokio::task::LocalSet::new();
             local.block_on(&rt, $future);
+            println!("after block!");
         })
     };
 }

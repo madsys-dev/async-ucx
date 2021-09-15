@@ -94,8 +94,8 @@ impl<'a> AmMsg<'a> {
         if !self.contains_data() {
             Ok(0)
         } else {
-            let mut iov = [IoSliceMut::new(buf)];
-            self.recv_data_vectored(&mut iov).await
+            let iov = [IoSliceMut::new(buf)];
+            self.recv_data_vectored(&iov).await
         }
     }
 
@@ -309,7 +309,7 @@ impl Worker {
             .read()
             .unwrap()
             .get(&id)
-            .map(|rc| rc.clone());
+            .cloned();
         if let Some(handler) = handler {
             handler.wait_msg(self).await
         } else {
