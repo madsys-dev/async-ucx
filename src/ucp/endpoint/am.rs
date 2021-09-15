@@ -104,8 +104,9 @@ impl<'a> AmMsg<'a> {
             Ok(0)
         } else {
             // clear data attr
-            self.msg.attr ^= ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_RNDV as u64
-                & ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_DATA as u64;
+            self.msg.attr &= !(ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_RNDV as u64
+                | ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_DATA as u64);
+            assert!(!self.contains_data());
             let data_desc = self.msg.data.as_ptr();
             let data_len = self.msg.data.len();
             self.msg.data = &[];
@@ -179,11 +180,18 @@ impl<'a> AmMsg<'a> {
             && !self.msg.reply_ep.is_null()
     }
 
-    // Send reply to endpoint
-    pub async fn reply(self) {
+    /// Send reply
+    pub async fn reply(&self, id: u32, header: &[u8], data: &[u8], need_reply: bool, proto: Option<AmProto>) -> Result<(), ()> {
         // todo: we should prevent endpoint from being freed
         //       currently, ucx doesn't provide such function.
-        todo!()
+        assert_eq!(self.need_reply(), true);
+        self.reply_vectorized(id, header, &[IoSlice::new(data)], need_reply, proto).await
+    }
+
+    /// Send reply
+    pub async fn reply_vectorized(&self, id: u32, header: &[u8], data: &[IoSlice<'_>], need_reply: bool, proto: Option<AmProto>) -> Result<(), ()> {
+        assert_eq!(self.need_reply(), true);
+        am_send(self.msg.reply_ep, id, header, data, need_reply, proto).await
     }
 }
 
@@ -225,6 +233,7 @@ impl AmHandler {
     fn callback(&self, header: &[u8], data: &'static [u8], reply: ucp_ep_h, attr: u64) {
         let msg = RawMsg::from_raw(self.id, header, data, reply, attr);
         self.msgs.lock().unwrap().push_back(msg);
+        self.notify.notify_one();
     }
 
     // wait active message
@@ -266,7 +275,7 @@ impl Worker {
                 handler.callback(header, data, std::ptr::null_mut(), 0);
             }
 
-            ucs_status_t::UCS_OK
+            ucs_status_t::UCS_INPROGRESS
         }
 
         if self.am_handlers.read().unwrap().contains_key(&id) {
@@ -278,20 +287,20 @@ impl Worker {
         if guard.contains_key(&id) {
             return;
         }
-        unsafe {
-            let param = ucp_am_handler_param_t {
-                id,
-                cb: Some(callback),
-                arg: Rc::into_raw(handler.clone()) as _,
-                field_mask: 0,
-                flags: (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID
-                    | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS
-                    | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB
-                    | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG)
-                    .0,
-            };
-            ucp_worker_set_am_recv_handler(self.handle, &param as _);
-        }
+        let param = ucp_am_handler_param_t {
+            id,
+            cb: Some(callback),
+            arg: Rc::into_raw(handler.clone()) as _,
+            field_mask: (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID
+                | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_FLAGS
+                | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB
+                | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG).0 as _,
+            flags: 0,
+        };
+        let status = unsafe {
+            ucp_worker_set_am_recv_handler(self.handle, &param as _)
+        };
+        assert!(status == ucs_status_t::UCS_OK);
         guard.insert(id, handler);
     }
 
@@ -319,9 +328,9 @@ impl Worker {
 }
 
 impl Endpoint {
-    pub async fn am_send(&self, id: u32, header: &[u8], data: &[u8]) -> Result<(), ()> {
+    pub async fn am_send(&self, id: u32, header: &[u8], data: &[u8], need_reply: bool, proto: Option<AmProto>) -> Result<(), ()> {
         let data = [IoSlice::new(data)];
-        self.am_send_vectorized(id, header, &data).await
+        self.am_send_vectorized(id, header, &data, need_reply, proto).await
     }
 
     pub async fn am_send_vectorized(
@@ -329,10 +338,18 @@ impl Endpoint {
         id: u32,
         header: &[u8],
         data: &[IoSlice<'_>],
+        need_reply: bool,
+        proto: Option<AmProto>,
     ) -> Result<(), ()> {
         let endpoint = self.handle;
-        am_send(endpoint, id, header, data).await
+        am_send(endpoint, id, header, data, need_reply, proto).await
     }
+}
+
+pub enum AmProto {
+    /// todo: why eager cause ucx corruption?
+    Eager,
+    Rndv,
 }
 
 async fn am_send(
@@ -340,6 +357,8 @@ async fn am_send(
     id: u32,
     header: &[u8],
     data: &[IoSlice<'_>],
+    need_reply: bool,
+    proto: Option<AmProto>
 ) -> Result<(), ()> {
     unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t, _data: *mut c_void) {
         trace!("am_send: complete");
@@ -351,10 +370,22 @@ async fn am_send(
     let (buffer, count) = unsafe {
         let param = &mut *param.as_mut_ptr();
         param.op_attr_mask = ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32
-            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32;
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_DATATYPE as u32
+            | ucp_op_attr_t::UCP_OP_ATTR_FIELD_FLAGS as u32;
+        param.flags = 0;
         param.cb = ucp_request_param_t__bindgen_ty_1 {
             send: Some(callback),
         };
+
+        match proto {
+            Some(AmProto::Eager) => param.flags |= ucp_send_am_flags::UCP_AM_SEND_FLAG_EAGER.0,
+            Some(AmProto::Rndv) => param.flags |= ucp_send_am_flags::UCP_AM_SEND_FLAG_RNDV.0,
+            _ => (),
+        }
+
+        if need_reply {
+            param.flags |= ucp_send_am_flags::UCP_AM_SEND_FLAG_REPLY.0;
+        }
 
         if data.len() == 1 {
             param.datatype = ucp_dt_make_contig(1);
@@ -397,5 +428,85 @@ unsafe fn poll_recv(ptr: ucs_status_ptr_t) -> Poll<()> {
         Poll::Pending
     } else {
         Poll::Ready(())
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "am")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn am() {
+        spawn_thread!(send_recv()).join().unwrap();
+    }
+
+    async fn send_recv() {
+        let context1 = Context::new();
+        let worker1 = context1.create_worker();
+        let context2 = Context::new();
+        let worker2 = context2.create_worker();
+        tokio::task::spawn_local(worker1.clone().polling());
+        tokio::task::spawn_local(worker2.clone().polling());
+        
+        // connect with each other
+        let mut listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
+        let listen_port = listener.socket_addr().port();
+        let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        addr.set_port(listen_port);
+        let endpoint2 = worker2.connect(addr);
+        let conn1 = listener.next().await;
+        let endpoint1 = worker1.accept(conn1);
+
+        worker1.am_register(16);
+        worker2.am_register(12);
+
+        let header = [0, 1, 2, 4];
+        let data = vec![1 as u8; 1];
+        let (_, msg) = tokio::join!(
+            async {
+                // send msg
+                let result = endpoint2.am_send(16, &header, &data, true, Some(AmProto::Rndv)).await;
+                assert!(result.is_ok());
+            },
+            async {
+                // recv msg
+                let msg = worker1.am_recv(16).await;
+                let mut msg = msg.expect("no msg");
+                assert_eq!(msg.header(), &header);
+                assert_eq!(msg.contains_data(), true);
+                assert_eq!(msg.data_len(), data.len());
+                let mut buffer = vec![0 as u8; msg.data_len()];
+                msg.recv_data(buffer.as_mut()).await.unwrap();
+                assert_eq!(data, buffer);
+                assert_eq!(msg.contains_data(), false);
+                msg
+            }
+        );
+
+        let header = [1, 3, 9, 10];
+        let data = vec![9 as u8; 1 << 20];
+        tokio::join!(
+            async {
+                // send reply
+                let result = msg.reply(12, &header, &data, false, Some(AmProto::Rndv)).await;
+                assert!(result.is_ok());
+            },
+            async {
+                // recv reply
+                let reply = worker2.am_recv(12).await;
+                let mut reply = reply.expect("no reply");
+                assert_eq!(reply.header(), &header);
+                assert_eq!(reply.contains_data(), true);
+                assert_eq!(reply.data_len(), data.len());
+                let mut buffer = vec![0 as u8; reply.data_len()];
+                reply.recv_data(buffer.as_mut()).await.unwrap();
+                assert_eq!(data, buffer);
+                assert_eq!(reply.contains_data(), false);
+            }
+        );
+
+        endpoint1.close().await;
+        endpoint2.close().await;
     }
 }
