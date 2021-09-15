@@ -83,6 +83,7 @@ impl Context {
             features: (ucp_feature::UCP_FEATURE_RMA
                 | ucp_feature::UCP_FEATURE_TAG
                 | ucp_feature::UCP_FEATURE_STREAM
+                | ucp_feature::UCP_FEATURE_AM
                 | ucp_feature::UCP_FEATURE_WAKEUP)
                 .0 as u64,
             request_size: std::mem::size_of::<Request>() as u64,
@@ -92,15 +93,8 @@ impl Context {
             ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         let mut handle = MaybeUninit::uninit();
-        let status = unsafe {
-            ucp_init_version(
-                UCP_API_MAJOR,
-                UCP_API_MINOR,
-                &params,
-                config.handle,
-                handle.as_mut_ptr(),
-            )
-        };
+        let status =
+            unsafe { ucp_init_version(1, 11, &params, config.handle, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         Arc::new(Context {
             handle: unsafe { handle.assume_init() },
