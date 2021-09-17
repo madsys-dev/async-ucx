@@ -1,11 +1,11 @@
+use crossbeam::queue::SegQueue;
 use tokio::sync::Notify;
 
 use super::*;
 use std::{
-    collections::VecDeque,
     io::{IoSlice, IoSliceMut},
     slice,
-    sync::{atomic::AtomicBool, Mutex},
+    sync::atomic::AtomicBool,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -322,7 +322,7 @@ impl<'a> AmStream<'a> {
 
 pub(crate) struct AmStreamInner {
     id: u16,
-    msgs: Mutex<VecDeque<RawMsg>>,
+    msgs: SegQueue<RawMsg>,
     notify: Notify,
     unregistered: AtomicBool,
 }
@@ -332,7 +332,7 @@ impl AmStreamInner {
     fn new(id: u16) -> Self {
         Self {
             id,
-            msgs: Mutex::new(VecDeque::with_capacity(512)),
+            msgs: SegQueue::new(),
             notify: Notify::new(),
             unregistered: AtomicBool::new(false),
         }
@@ -347,25 +347,22 @@ impl AmStreamInner {
     // callback function
     fn callback(&self, header: &[u8], data: &'static [u8], reply: ucp_ep_h, attr: u64) {
         let msg = RawMsg::from_raw(self.id, header, data, reply, attr);
-        self.msgs.lock().unwrap().push_back(msg);
+        self.msgs.push(msg);
         self.notify.notify_one();
     }
 
-    // Wait active message
+    /// Wait active message.
     async fn wait_msg<'a>(&self, worker: &'a Worker) -> Option<AmMsg<'a>> {
+        // todo: how to make this thread safe?
         while !self.unregistered.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Some(msg) = self.msgs.lock().unwrap().pop_front() {
+            if let Some(msg) = self.msgs.pop() {
                 return Some(AmMsg::from_raw(worker, msg));
             }
 
             self.notify.notified().await;
         }
 
-        self.msgs
-            .lock()
-            .unwrap()
-            .pop_front()
-            .map(|msg| AmMsg::from_raw(worker, msg))
+        self.msgs.pop().map(|msg| AmMsg::from_raw(worker, msg))
     }
 }
 

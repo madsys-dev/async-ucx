@@ -10,7 +10,7 @@ description = "Async Rust bindings to OpenUCX."
 [features]
 default = ["am"]
 event = ["tokio"]
-am = ["tokio"]
+am = ["tokio", "crossbeam"]
 
 [dependencies]
 ucx-sys = { path = "ucx-sys" }
@@ -20,6 +20,7 @@ futures-lite = "1.11"
 lazy_static = "1.4"
 log = "0.4"
 tokio = { version = "1.0", features = ["net"], optional = true }
+crossbeam = { version = "0.8", optional = true }
 derivative = "2.2.0"
 
 [dev-dependencies]
