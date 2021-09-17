@@ -23,7 +23,7 @@ enum AmData {
 
 impl AmData {
     fn from_raw(data: &'static [u8], attr: u64) -> Option<AmData> {
-        if data.len() == 0 {
+        if data.is_empty() {
             None
         } else if attr & ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_DATA as u64 != 0 {
             Some(AmData::Data(data))
@@ -63,7 +63,7 @@ impl AmData {
 }
 
 struct RawMsg {
-    id: u32,
+    id: u16,
     header: Vec<u8>,
     data: Option<AmData>,
     reply_ep: ucp_ep_h,
@@ -72,7 +72,7 @@ struct RawMsg {
 
 impl RawMsg {
     fn from_raw(
-        id: u32,
+        id: u16,
         header: &[u8],
         data: &'static [u8],
         reply_ep: ucp_ep_h,
@@ -99,7 +99,7 @@ impl<'a> AmMsg<'a> {
     }
 
     #[inline]
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> u16 {
         self.msg.id
     }
 
@@ -270,7 +270,7 @@ impl<'a> AmMsg<'a> {
     ) -> Result<(), ()> {
         // todo: we should prevent endpoint from being freed
         //       currently, ucx doesn't provide such function.
-        assert_eq!(self.need_reply(), true);
+        assert!(self.need_reply());
         self.reply_vectorized(id, header, &[IoSlice::new(data)], need_reply, proto)
             .await
     }
@@ -284,7 +284,7 @@ impl<'a> AmMsg<'a> {
         need_reply: bool,
         proto: Option<AmProto>,
     ) -> Result<(), ()> {
-        assert_eq!(self.need_reply(), true);
+        assert!(self.need_reply());
         am_send(self.msg.reply_ep, id, header, data, need_reply, proto).await
     }
 }
@@ -303,16 +303,33 @@ impl<'a> Drop for AmMsg<'a> {
     }
 }
 
-pub(crate) struct AmHandler {
-    id: u32,
+#[derive(Clone)]
+pub struct AmStream<'a> {
+    worker: &'a Worker,
+    inner: Rc<AmStreamInner>,
+}
+
+impl<'a> AmStream<'a> {
+    fn new(worker: &'a Worker, inner: Rc<AmStreamInner>) -> Self {
+        AmStream { worker, inner }
+    }
+
+    /// Wait active message.
+    pub async fn wait_msg(&self) -> Option<AmMsg<'_>> {
+        self.inner.wait_msg(self.worker).await
+    }
+}
+
+pub(crate) struct AmStreamInner {
+    id: u16,
     msgs: Mutex<VecDeque<RawMsg>>,
     notify: Notify,
     unregistered: AtomicBool,
 }
 
-impl AmHandler {
+impl AmStreamInner {
     // new active message handler
-    fn new(id: u32) -> Self {
+    fn new(id: u16) -> Self {
         Self {
             id,
             msgs: Mutex::new(VecDeque::with_capacity(512)),
@@ -334,7 +351,7 @@ impl AmHandler {
         self.notify.notify_one();
     }
 
-    // wait active message
+    // Wait active message
     async fn wait_msg<'a>(&self, worker: &'a Worker) -> Option<AmMsg<'a>> {
         while !self.unregistered.load(std::sync::atomic::Ordering::Relaxed) {
             if let Some(msg) = self.msgs.lock().unwrap().pop_front() {
@@ -353,7 +370,13 @@ impl AmHandler {
 }
 
 impl Worker {
-    pub fn am_register(&self, id: u32) {
+    /// Register active message stream for `id`.
+    /// Message of this `id` can be received with `am_recv`.
+    pub fn am_stream(&self, id: u16) -> Result<AmStream<'_>, ()> {
+        if let Some(inner) = self.am_streams.read().unwrap().get(&id) {
+            return Ok(AmStream::new(self, inner.clone()));
+        }
+
         unsafe extern "C" fn callback(
             arg: *mut c_void,
             header: *const c_void,
@@ -362,11 +385,10 @@ impl Worker {
             data_len: u64,
             param: *const ucp_am_recv_param_t,
         ) -> ucs_status_t {
-            let handler = &*(arg as *const AmHandler);
+            let handler = &*(arg as *const AmStreamInner);
             let header = slice::from_raw_parts(header as *const u8, header_len as usize);
             let data = slice::from_raw_parts(data as *const u8, data_len as usize);
 
-            assert!(!param.is_null());
             let param = &*param;
             handler.callback(header, data, param.reply_ep, param.recv_attr);
 
@@ -379,45 +401,40 @@ impl Worker {
             }
         }
 
-        if self.am_handlers.read().unwrap().contains_key(&id) {
-            return;
+        let stream = Rc::new(AmStreamInner::new(id));
+        unsafe {
+            self.am_register(id, Some(callback), Rc::as_ptr(&stream) as _)?;
         }
+        self.am_streams.write().unwrap().insert(id, stream.clone());
 
-        let handler = Rc::new(AmHandler::new(id));
-        let mut guard = self.am_handlers.write().unwrap();
-        if guard.contains_key(&id) {
-            return;
-        }
+        return Ok(AmStream::new(self, stream));
+    }
+
+    /// Register active message handler for `id`.
+    /// # Safety: This method is not concurrent safe with `Worker::polling` or `Worker::event_poll`
+    pub unsafe fn am_register(
+        &self,
+        id: u16,
+        cb: ucp_am_recv_callback_t,
+        arg: *mut c_void,
+    ) -> Result<(), ()> {
         let param = ucp_am_handler_param_t {
-            id,
-            cb: Some(callback),
-            arg: Rc::into_raw(handler.clone()) as _,
+            id: id as _,
+            cb,
+            arg,
             field_mask: (ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ID
                 | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_CB
                 | ucp_am_handler_param_field::UCP_AM_HANDLER_PARAM_FIELD_ARG)
                 .0 as _,
             flags: 0,
         };
-        let status = unsafe { ucp_worker_set_am_recv_handler(self.handle, &param as _) };
+        let status = ucp_worker_set_am_recv_handler(self.handle, &param as _);
         assert!(status == ucs_status_t::UCS_OK);
-        guard.insert(id, handler);
-    }
-
-    // Unregister active message handler
-    pub fn am_unregister(&self, id: u32) {
-        let handler = self.am_handlers.write().unwrap().remove(&id);
-        if let Some(handler) = handler {
-            handler.unregister();
+        if let Some(stream) = self.am_streams.write().unwrap().remove(&id) {
+            stream.unregister();
         }
-    }
 
-    pub async fn am_recv<'a>(&'a self, id: u32) -> Option<AmMsg<'a>> {
-        let handler = self.am_handlers.read().unwrap().get(&id).cloned();
-        if let Some(handler) = handler {
-            handler.wait_msg(self).await
-        } else {
-            None
-        }
+        Ok(())
     }
 }
 
@@ -449,9 +466,6 @@ impl Endpoint {
 }
 
 pub enum AmProto {
-    /// Some UCT transport may corrupt with eager proto,
-    /// don't use this!
-    /// todo: why?
     Eager,
     Rndv,
 }
@@ -471,7 +485,6 @@ async fn am_send(
     }
 
     let mut param = MaybeUninit::<ucp_request_param_t>::uninit();
-    // let mut buffer = vec![0_u8; 1000];
     let (buffer, count) = unsafe {
         let param = &mut *param.as_mut_ptr();
         param.op_attr_mask = ucp_op_attr_t::UCP_OP_ATTR_FIELD_CALLBACK as u32
@@ -563,20 +576,28 @@ mod tests {
         let conn1 = listener.next().await;
         let endpoint1 = worker1.accept(conn1);
 
-        worker1.am_register(16);
-        worker2.am_register(12);
+        let stream1 = worker1.am_stream(16).unwrap();
+        let stream2 = worker2.am_stream(12).unwrap();
 
         let header = vec![1, 2, 3, 4];
-        let data = vec![1 as u8; 1 << 10];
+        let data = vec![1, 2, 3, 4];
         let (_, msg) = tokio::join!(
             async {
                 // send msg
-                let result = endpoint2.am_send(16, &header, &data, true, None).await;
+                let result = endpoint2
+                    .am_send(
+                        16,
+                        header.as_slice(),
+                        data.as_slice(),
+                        true,
+                        Some(AmProto::Eager),
+                    )
+                    .await;
                 assert!(result.is_ok());
             },
             async {
                 // recv msg
-                let msg = worker1.am_recv(16).await;
+                let msg = stream1.wait_msg().await;
                 let mut msg = msg.expect("no msg");
                 assert_eq!(msg.header(), &header);
                 assert_eq!(msg.contains_data(), true);
@@ -589,18 +610,16 @@ mod tests {
         );
 
         let header = vec![1, 3, 9, 10];
-        let data = vec![9 as u8; 1 << 20];
+        let data = vec![9 as u8; 1 << 1];
         tokio::join!(
             async {
                 // send reply
-                let result = msg
-                    .reply(12, &header, &data, false, Some(AmProto::Rndv))
-                    .await;
+                let result = msg.reply(12, &header, &data, false, None).await;
                 assert!(result.is_ok());
             },
             async {
                 // recv reply
-                let reply = worker2.am_recv(12).await;
+                let reply = stream2.wait_msg().await;
                 let mut reply = reply.expect("no reply");
                 assert_eq!(reply.header(), &header);
                 assert_eq!(reply.contains_data(), true);

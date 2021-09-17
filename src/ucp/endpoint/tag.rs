@@ -184,3 +184,51 @@ unsafe fn poll_tag(ptr: ucs_status_ptr_t) -> Poll<(u64, usize)> {
     let info = info.assume_init();
     Poll::Ready((info.sender_tag, info.length as usize))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn tag() {
+        spawn_thread!(_tag()).join().unwrap();
+    }
+
+    async fn _tag() {
+        let context1 = Context::new();
+        let worker1 = context1.create_worker();
+        let context2 = Context::new();
+        let worker2 = context2.create_worker();
+        tokio::task::spawn_local(worker1.clone().polling());
+        tokio::task::spawn_local(worker2.clone().polling());
+
+        // connect with each other
+        let mut listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
+        let listen_port = listener.socket_addr().port();
+        println!("listen at port {}", listen_port);
+        let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        addr.set_port(listen_port);
+        let endpoint2 = worker2.connect(addr);
+        let conn1 = listener.next().await;
+        let endpoint1 = worker1.accept(conn1);
+
+        // send tag message
+        tokio::join!(
+            async {
+                // send
+                let mut buf = vec![0; 4 << 10];
+                endpoint2.tag_send(1, &mut buf).await;
+                println!("tag sended");
+            },
+            async {
+                // recv
+                let mut buf = vec![MaybeUninit::uninit(); 4 << 10];
+                worker1.tag_recv(1, &mut buf).await;
+                println!("tag recved");
+            }
+        );
+
+        // close endpoint1 & endpont2, drop them directly will cause deadlock
+        endpoint1.close().await;
+        endpoint2.close().await;
+    }
+}

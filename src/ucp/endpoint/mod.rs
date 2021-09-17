@@ -40,6 +40,16 @@ impl Endpoint {
         Endpoint::create(worker, params)
     }
 
+    pub(super) fn connect_addr(worker: &Rc<Worker>, addr: *const ucp_address_t) -> Self {
+        #[allow(invalid_value)]
+        let params = ucp_ep_params {
+            field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS.0 as u64,
+            address: addr,
+            ..unsafe { MaybeUninit::uninit().assume_init() }
+        };
+        Endpoint::create(worker, params)
+    }
+
     pub(super) fn accept(worker: &Rc<Worker>, connection: ConnectionRequest) -> Self {
         #[allow(invalid_value)]
         let params = ucp_ep_params {

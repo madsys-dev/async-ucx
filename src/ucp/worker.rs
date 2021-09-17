@@ -17,7 +17,7 @@ pub struct Worker {
     context: Arc<Context>,
     #[cfg(feature = "am")]
     #[derivative(Debug = "ignore")]
-    pub(crate) am_handlers: RwLock<HashMap<u32, Rc<AmHandler>>>,
+    pub(crate) am_streams: RwLock<HashMap<u16, Rc<AmStreamInner>>>,
 }
 
 impl Drop for Worker {
@@ -29,7 +29,11 @@ impl Drop for Worker {
 impl Worker {
     pub(super) fn new(context: &Arc<Context>) -> Rc<Self> {
         let mut params = MaybeUninit::<ucp_worker_params_t>::uninit();
-        unsafe { (*params.as_mut_ptr()).field_mask = 0 };
+        unsafe {
+            (*params.as_mut_ptr()).field_mask =
+                ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE.0 as _;
+            (*params.as_mut_ptr()).thread_mode = ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE;
+        };
         let mut handle = MaybeUninit::uninit();
         let status =
             unsafe { ucp_worker_create(context.handle, params.as_ptr(), handle.as_mut_ptr()) };
@@ -38,7 +42,7 @@ impl Worker {
             handle: unsafe { handle.assume_init() },
             context: context.clone(),
             #[cfg(feature = "am")]
-            am_handlers: RwLock::new(HashMap::new()),
+            am_streams: RwLock::new(HashMap::new()),
         })
     }
 
@@ -104,6 +108,10 @@ impl Worker {
 
     pub fn create_listener(self: &Rc<Self>, addr: SocketAddr) -> Listener {
         Listener::new(self, addr)
+    }
+
+    pub fn connect_addr(self: &Rc<Self>, addr: *const ucp_address_t) -> Endpoint {
+        Endpoint::connect_addr(self, addr)
     }
 
     pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Endpoint {
