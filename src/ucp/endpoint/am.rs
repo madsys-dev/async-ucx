@@ -551,12 +551,14 @@ unsafe fn poll_recv(ptr: ucs_status_ptr_t) -> Poll<()> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[test_env_log::test]
     fn am() {
-        spawn_thread!(send_recv()).join().unwrap();
+        for i in 0..20_usize {
+            spawn_thread!(send_recv(4 << i)).join().unwrap();
+        }
     }
 
-    async fn send_recv() {
+    async fn send_recv(data_size: usize) {
         let context1 = Context::new();
         let worker1 = context1.create_worker();
         let context2 = Context::new();
@@ -577,7 +579,7 @@ mod tests {
         let stream2 = worker2.am_stream(12).unwrap();
 
         let header = vec![1, 2, 3, 4];
-        let data = vec![1, 2, 3, 4];
+        let data = vec![1_u8; data_size];
         let (_, msg) = tokio::join!(
             async {
                 // send msg
@@ -607,7 +609,7 @@ mod tests {
         );
 
         let header = vec![1, 3, 9, 10];
-        let data = vec![9 as u8; 1 << 1];
+        let data = vec![2_u8; data_size];
         tokio::join!(
             async {
                 // send reply

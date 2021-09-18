@@ -114,9 +114,8 @@ impl Drop for Listener {
 mod tests {
     use super::*;
 
-    #[test]
+    #[test_env_log::test]
     fn accept() {
-        env_logger::init();
         let (sender, recver) = tokio::sync::oneshot::channel();
         let f1 = spawn_thread!(async move {
             let context = Context::new();

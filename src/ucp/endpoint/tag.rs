@@ -188,12 +188,14 @@ unsafe fn poll_tag(ptr: ucs_status_ptr_t) -> Poll<(u64, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
+    #[test_env_log::test]
     fn tag() {
-        spawn_thread!(_tag()).join().unwrap();
+        for i in 0..20_usize {
+            spawn_thread!(_tag(4 << i)).join().unwrap();
+        }
     }
 
-    async fn _tag() {
+    async fn _tag(msg_size: usize) {
         let context1 = Context::new();
         let worker1 = context1.create_worker();
         let context2 = Context::new();
@@ -215,13 +217,13 @@ mod tests {
         tokio::join!(
             async {
                 // send
-                let mut buf = vec![0; 4 << 10];
+                let mut buf = vec![0; msg_size];
                 endpoint2.tag_send(1, &mut buf).await;
                 println!("tag sended");
             },
             async {
                 // recv
-                let mut buf = vec![MaybeUninit::uninit(); 4 << 10];
+                let mut buf = vec![MaybeUninit::uninit(); msg_size];
                 worker1.tag_recv(1, &mut buf).await;
                 println!("tag recved");
             }

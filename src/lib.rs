@@ -6,7 +6,7 @@ extern crate log;
 #[cfg(test)]
 macro_rules! spawn_thread {
     ($future:expr) => {
-        std::thread::spawn(|| {
+        std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
                 .build()

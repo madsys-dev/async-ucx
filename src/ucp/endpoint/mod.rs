@@ -28,13 +28,15 @@ impl Endpoint {
         #[allow(invalid_value)]
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
-                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR)
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
                 .0 as u64,
             flags: ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_CLIENT_SERVER.0,
             sockaddr: ucs_sock_addr {
                 addr: sockaddr.as_ptr() as _,
                 addrlen: sockaddr.len(),
             },
+            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
             ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         Endpoint::create(worker, params)
@@ -43,8 +45,11 @@ impl Endpoint {
     pub(super) fn connect_addr(worker: &Rc<Worker>, addr: *const ucp_address_t) -> Self {
         #[allow(invalid_value)]
         let params = ucp_ep_params {
-            field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS.0 as u64,
+            field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
+                .0 as u64,
             address: addr,
+            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
             ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         Endpoint::create(worker, params)
@@ -112,8 +117,11 @@ impl Endpoint {
             while unsafe { poll_normal(status) }.is_pending() {
                 futures_lite::future::yield_now().await;
             }
+            unsafe { ucp_request_free(status as _) };
         } else {
-            panic!("failed to close endpoint: {:?}", UCS_PTR_RAW_STATUS(status));
+            // todo: maybe this shouldn't treat as error ...
+            let status = UCS_PTR_RAW_STATUS(status);
+            warn!("close endpoint get error: {:?}", status);
         }
         std::mem::forget(self);
     }
