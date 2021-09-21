@@ -60,15 +60,18 @@ impl Worker {
     /// This function register `event_fd` on tokio's event loop and wait `event_fd` become readable,
     ////  then call progress function.
     #[cfg(feature = "event")]
-    pub async fn event_poll(self: Rc<Self>) {
-        let wait_fd = AsyncFd::new(self.event_fd()).unwrap();
+    pub async fn event_poll(self: Rc<Self>) -> Result<(), Error> {
+        let fd = self.event_fd()?;
+        let wait_fd = AsyncFd::new(fd).unwrap();
         while Rc::strong_count(&self) > 1 {
             while self.progress() != 0 {}
-            if self.arm() {
+            if self.arm().unwrap() {
                 let mut ready = wait_fd.readable().await.unwrap();
                 ready.clear_ready();
             }
         }
+
+        Ok(())
     }
 
     /// Prints information about the worker.
