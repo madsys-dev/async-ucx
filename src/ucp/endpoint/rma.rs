@@ -200,6 +200,11 @@ mod tests {
         endpoint2
             .put(&buf2[..], buf1.as_mut_ptr() as u64, &rkey2)
             .await;
+        // The completion of the put operation only means that the reference to the buffer can be released.
+        // Remote side may can't see the result of put operation, need flush or barray.
+        // Otherwise, there is a certain chance that the test will fail.
+        endpoint1.flush().await;
+        endpoint2.flush().await;
         assert_eq!(&buf1[..], &buf2[..]);
 
         // test get

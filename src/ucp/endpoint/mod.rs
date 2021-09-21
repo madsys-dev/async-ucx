@@ -86,7 +86,8 @@ impl Endpoint {
         trace!("flush: endpoint={:?}", self.handle);
         unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
             trace!("flush: complete");
-            ucp_request_free(request);
+            let request = &mut *(request as *mut Request);
+            request.waker.wake();
         }
         let status = unsafe { ucp_ep_flush_nb(self.handle, 0, Some(callback)) };
         if status.is_null() {
@@ -168,6 +169,7 @@ unsafe fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<()> {
     if status == ucs_status_t::UCS_INPROGRESS {
         Poll::Pending
     } else {
+        assert_eq!(status, ucs_status_t::UCS_OK);
         Poll::Ready(())
     }
 }
