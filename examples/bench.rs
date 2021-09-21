@@ -18,41 +18,44 @@ async fn main() -> Result<()> {
 async fn client(server_addr: String) -> ! {
     println!("client: connect to {:?}", server_addr);
 
-    let context = Context::new();
-    let worker = context.create_worker();
+    let context = Context::new().unwrap();
+    let worker = context.create_worker().unwrap();
     #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let endpoint = worker.connect(server_addr.parse().unwrap());
+    let endpoint = worker.connect(server_addr.parse().unwrap()).unwrap();
     endpoint.print_to_stderr();
 
     let mut id = [MaybeUninit::uninit()];
-    endpoint.worker().tag_recv(100, &mut id).await;
+    endpoint.worker().tag_recv(100, &mut id).await.unwrap();
     let tag = unsafe { id[0].assume_init() } as u64 + 200;
     println!("client: got tag {:?}", tag);
 
     let long_msg: Vec<u8> = (0..47008).map(|x| x as u8).collect();
     loop {
-        endpoint.tag_send(tag, &long_msg).await;
+        endpoint.tag_send(tag, &long_msg).await.unwrap();
         endpoint
             .worker()
             .tag_recv(tag, &mut [MaybeUninit::uninit()])
-            .await;
+            .await
+            .unwrap();
     }
 }
 
 async fn server() -> ! {
     println!("server");
-    let context = Context::new();
-    let worker = context.create_worker();
+    let context = Context::new().unwrap();
+    let worker = context.create_worker().unwrap();
     #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let mut listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
+    let mut listener = worker
+        .create_listener("0.0.0.0:10000".parse().unwrap())
+        .unwrap();
     tokio::task::spawn_local(async {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -60,20 +63,20 @@ async fn server() -> ! {
             println!("{} IOPS", count);
         }
     });
-    println!("listening on {}", listener.socket_addr());
+    println!("listening on {}", listener.socket_addr().unwrap());
 
     for i in 0u8.. {
         let conn = listener.next().await;
-        conn.remote_addr();
-        let ep = worker.accept(conn);
+        conn.remote_addr().unwrap();
+        let ep = worker.accept(conn).unwrap();
         println!("accept {}", i);
-        ep.tag_send(100, &[i]).await;
+        ep.tag_send(100, &[i]).await.unwrap();
         tokio::task::spawn_local(async move {
             let tag = i as u64 + 200;
             let mut buf = vec![MaybeUninit::uninit(); 50000];
             loop {
-                ep.worker().tag_recv(tag, &mut buf).await;
-                ep.tag_send(tag, &[0]).await;
+                ep.worker().tag_recv(tag, &mut buf).await.unwrap();
+                ep.tag_send(tag, &[0]).await.unwrap();
                 COUNT.fetch_add(1, Ordering::SeqCst);
             }
         });

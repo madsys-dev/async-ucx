@@ -1,6 +1,6 @@
 [package]
 name = "async-ucx"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Runji Wang <wangrunji0408@163.com>"]
 edition = "2018"
 description = "Async Rust bindings to OpenUCX."

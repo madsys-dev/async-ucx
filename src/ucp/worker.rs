@@ -27,7 +27,7 @@ impl Drop for Worker {
 }
 
 impl Worker {
-    pub(super) fn new(context: &Arc<Context>) -> Rc<Self> {
+    pub(super) fn new(context: &Arc<Context>) -> Result<Rc<Self>, Error> {
         let mut params = MaybeUninit::<ucp_worker_params_t>::uninit();
         unsafe {
             (*params.as_mut_ptr()).field_mask =
@@ -37,13 +37,14 @@ impl Worker {
         let mut handle = MaybeUninit::uninit();
         let status =
             unsafe { ucp_worker_create(context.handle, params.as_ptr(), handle.as_mut_ptr()) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
-        Rc::new(Worker {
+        Error::from_status(status)?;
+
+        Ok(Rc::new(Worker {
             handle: unsafe { handle.assume_init() },
             context: context.clone(),
             #[cfg(feature = "am")]
             am_streams: RwLock::new(HashMap::new()),
-        })
+        }))
     }
 
     /// Make progress on the worker.
@@ -92,51 +93,52 @@ impl Worker {
     ///
     /// This address can be passed to remote instances of the UCP library
     /// in order to connect to this worker.
-    pub fn address(&self) -> WorkerAddress<'_> {
+    pub fn address(&self) -> Result<WorkerAddress<'_>, Error> {
         let mut handle = MaybeUninit::uninit();
         let mut length = MaybeUninit::uninit();
         let status = unsafe {
             ucp_worker_get_address(self.handle, handle.as_mut_ptr(), length.as_mut_ptr())
         };
-        assert_eq!(status, ucs_status_t::UCS_OK);
-        WorkerAddress {
+        Error::from_status(status)?;
+
+        Ok(WorkerAddress {
             handle: unsafe { handle.assume_init() },
             length: unsafe { length.assume_init() } as usize,
             worker: self,
-        }
+        })
     }
 
-    pub fn create_listener(self: &Rc<Self>, addr: SocketAddr) -> Listener {
+    pub fn create_listener(self: &Rc<Self>, addr: SocketAddr) -> Result<Listener, Error> {
         Listener::new(self, addr)
     }
 
-    pub fn connect_addr(self: &Rc<Self>, addr: *const ucp_address_t) -> Endpoint {
+    pub fn connect_addr(self: &Rc<Self>, addr: *const ucp_address_t) -> Result<Endpoint, Error> {
         Endpoint::connect_addr(self, addr)
     }
 
-    pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Endpoint {
+    pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Result<Endpoint, Error> {
         Endpoint::connect(self, addr)
     }
 
-    pub fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Endpoint {
+    pub fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Result<Endpoint, Error> {
         Endpoint::accept(self, connection)
     }
 
     /// Waits (blocking) until an event has happened.
-    pub fn wait(&self) {
+    pub fn wait(&self) -> Result<(), Error> {
         let status = unsafe { ucp_worker_wait(self.handle) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status)
     }
 
     /// This needs to be called before waiting on each notification on this worker.
     ///
     /// Returns 'true' if one can wait for events (sleep mode).
-    pub fn arm(&self) -> bool {
+    pub fn arm(&self) -> Result<bool, Error> {
         let status = unsafe { ucp_worker_arm(self.handle) };
         match status {
-            ucs_status_t::UCS_OK => true,
-            ucs_status_t::UCS_ERR_BUSY => false,
-            _ => panic!("{:?}", status),
+            ucs_status_t::UCS_OK => Ok(true),
+            ucs_status_t::UCS_ERR_BUSY => Ok(false),
+            status => Err(Error::from_error(status)),
         }
     }
 
@@ -146,11 +148,12 @@ impl Worker {
     }
 
     /// Returns a valid file descriptor for polling functions.
-    pub fn event_fd(&self) -> i32 {
+    pub fn event_fd(&self) -> Result<i32, Error> {
         let mut fd = MaybeUninit::uninit();
         let status = unsafe { ucp_worker_get_efd(self.handle, fd.as_mut_ptr()) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
-        unsafe { fd.assume_init() }
+        Error::from_status(status)?;
+
+        unsafe { Ok(fd.assume_init()) }
     }
 
     /// This routine flushes all outstanding AMO and RMA communications on the worker.
@@ -162,7 +165,7 @@ impl Worker {
 
 impl AsRawFd for Worker {
     fn as_raw_fd(&self) -> i32 {
-        self.event_fd()
+        self.event_fd().unwrap()
     }
 }
 

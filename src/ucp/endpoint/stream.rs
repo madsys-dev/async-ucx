@@ -1,7 +1,7 @@
 use super::*;
 
 impl Endpoint {
-    pub async fn stream_send(&self, buf: &[u8]) -> usize {
+    pub async fn stream_send(&self, buf: &[u8]) -> Result<usize, Error> {
         trace!("stream_send: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
             trace!(
@@ -31,12 +31,12 @@ impl Endpoint {
             }
             .await;
         } else {
-            panic!("failed to send stream: {:?}", UCS_PTR_RAW_STATUS(status));
+            return Err(Error::from_ptr(status).unwrap_err());
         }
-        buf.len()
+        Ok(buf.len())
     }
 
-    pub async fn stream_recv(&self, buf: &mut [MaybeUninit<u8>]) -> usize {
+    pub async fn stream_recv(&self, buf: &mut [MaybeUninit<u8>]) -> Result<usize, Error> {
         trace!("stream_recv: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t, length: u64) {
             trace!(
@@ -63,15 +63,15 @@ impl Endpoint {
         if status.is_null() {
             let length = unsafe { length.assume_init() } as usize;
             trace!("stream_recv: complete. len={}", length);
-            length
+            Ok(length)
         } else if UCS_PTR_IS_PTR(status) {
-            RequestHandle {
+            Ok(RequestHandle {
                 ptr: status,
                 poll_fn: poll_stream,
             }
-            .await
+            .await)
         } else {
-            panic!("failed to recv stream: {:?}", UCS_PTR_RAW_STATUS(status));
+            Err(Error::from_ptr(status).unwrap_err())
         }
     }
 }

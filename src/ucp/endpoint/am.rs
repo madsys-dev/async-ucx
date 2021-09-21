@@ -127,7 +127,7 @@ impl<'a> AmMsg<'a> {
         self.msg.data.as_ref().map_or(0, |data| data.len())
     }
 
-    pub async fn recv_data(&mut self) -> Result<Vec<u8>, ()> {
+    pub async fn recv_data(&mut self) -> Result<Vec<u8>, Error> {
         match self.msg.data.take() {
             None => Ok(Vec::new()),
             Some(AmData::Eager(vec)) => Ok(vec),
@@ -144,7 +144,7 @@ impl<'a> AmMsg<'a> {
         }
     }
 
-    pub async fn recv_data_single(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
+    pub async fn recv_data_single(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         if !self.contains_data() {
             Ok(0)
         } else {
@@ -153,7 +153,7 @@ impl<'a> AmMsg<'a> {
         }
     }
 
-    pub async fn recv_data_vectored(&mut self, iov: &[IoSliceMut<'_>]) -> Result<usize, ()> {
+    pub async fn recv_data_vectored(&mut self, iov: &[IoSliceMut<'_>]) -> Result<usize, Error> {
         let data = self.msg.data.take();
         if let Some(data) = data {
             if let AmData::Eager(mut data) = data {
@@ -245,7 +245,7 @@ impl<'a> AmMsg<'a> {
                 .await;
                 Ok(data_len)
             } else {
-                panic!("failed to recv data: {:?}", UCS_PTR_RAW_STATUS(status));
+                Err(Error::from_ptr(status).unwrap_err())
             }
         } else {
             // no data
@@ -267,7 +267,7 @@ impl<'a> AmMsg<'a> {
         data: &[u8],
         need_reply: bool,
         proto: Option<AmProto>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), Error> {
         // todo: we should prevent endpoint from being freed
         //       currently, ucx doesn't provide such function.
         assert!(self.need_reply());
@@ -283,7 +283,7 @@ impl<'a> AmMsg<'a> {
         data: &[IoSlice<'_>],
         need_reply: bool,
         proto: Option<AmProto>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), Error> {
         assert!(self.need_reply());
         am_send(self.msg.reply_ep, id, header, data, need_reply, proto).await
     }
@@ -369,7 +369,7 @@ impl AmStreamInner {
 impl Worker {
     /// Register active message stream for `id`.
     /// Message of this `id` can be received with `am_recv`.
-    pub fn am_stream(&self, id: u16) -> Result<AmStream<'_>, ()> {
+    pub fn am_stream(&self, id: u16) -> Result<AmStream<'_>, Error> {
         if let Some(inner) = self.am_streams.read().unwrap().get(&id) {
             return Ok(AmStream::new(self, inner.clone()));
         }
@@ -414,7 +414,7 @@ impl Worker {
         id: u16,
         cb: ucp_am_recv_callback_t,
         arg: *mut c_void,
-    ) -> Result<(), ()> {
+    ) -> Result<(), Error> {
         let param = ucp_am_handler_param_t {
             id: id as _,
             cb,
@@ -426,7 +426,7 @@ impl Worker {
             flags: 0,
         };
         let status = ucp_worker_set_am_recv_handler(self.handle, &param as _);
-        assert!(status == ucs_status_t::UCS_OK);
+        Error::from_status(status)?;
         if let Some(stream) = self.am_streams.write().unwrap().remove(&id) {
             stream.unregister();
         }
@@ -443,7 +443,7 @@ impl Endpoint {
         data: &[u8],
         need_reply: bool,
         proto: Option<AmProto>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), Error> {
         let data = [IoSlice::new(data)];
         self.am_send_vectorized(id, header, &data, need_reply, proto)
             .await
@@ -456,7 +456,7 @@ impl Endpoint {
         data: &[IoSlice<'_>],
         need_reply: bool,
         proto: Option<AmProto>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), Error> {
         let endpoint = self.handle;
         am_send(endpoint, id, header, data, need_reply, proto).await
     }
@@ -474,7 +474,7 @@ async fn am_send(
     data: &[IoSlice<'_>],
     need_reply: bool,
     proto: Option<AmProto>,
-) -> Result<(), ()> {
+) -> Result<(), Error> {
     unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t, _data: *mut c_void) {
         trace!("am_send: complete");
         let request = &mut *(request as *mut Request);
@@ -533,7 +533,7 @@ async fn am_send(
         .await;
         Ok(())
     } else {
-        panic!("failed to send am: {:?}", UCS_PTR_RAW_STATUS(status));
+        Err(Error::from_ptr(status).unwrap_err())
     }
 }
 
@@ -559,21 +559,23 @@ mod tests {
     }
 
     async fn send_recv(data_size: usize) {
-        let context1 = Context::new();
-        let worker1 = context1.create_worker();
-        let context2 = Context::new();
-        let worker2 = context2.create_worker();
+        let context1 = Context::new().unwrap();
+        let worker1 = context1.create_worker().unwrap();
+        let context2 = Context::new().unwrap();
+        let worker2 = context2.create_worker().unwrap();
         tokio::task::spawn_local(worker1.clone().polling());
         tokio::task::spawn_local(worker2.clone().polling());
 
         // connect with each other
-        let mut listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
-        let listen_port = listener.socket_addr().port();
+        let mut listener = worker1
+            .create_listener("0.0.0.0:0".parse().unwrap())
+            .unwrap();
+        let listen_port = listener.socket_addr().unwrap().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let endpoint2 = worker2.connect(addr);
+        let endpoint2 = worker2.connect(addr).unwrap();
         let conn1 = listener.next().await;
-        let endpoint1 = worker1.accept(conn1);
+        let endpoint1 = worker1.accept(conn1).unwrap();
 
         let stream1 = worker1.am_stream(16).unwrap();
         let stream2 = worker2.am_stream(12).unwrap();

@@ -23,7 +23,7 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Self {
+    pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Result<Self, Error> {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         #[allow(invalid_value)]
         let params = ucp_ep_params {
@@ -42,7 +42,10 @@ impl Endpoint {
         Endpoint::create(worker, params)
     }
 
-    pub(super) fn connect_addr(worker: &Rc<Worker>, addr: *const ucp_address_t) -> Self {
+    pub(super) fn connect_addr(
+        worker: &Rc<Worker>,
+        addr: *const ucp_address_t,
+    ) -> Result<Self, Error> {
         #[allow(invalid_value)]
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS
@@ -55,7 +58,10 @@ impl Endpoint {
         Endpoint::create(worker, params)
     }
 
-    pub(super) fn accept(worker: &Rc<Worker>, connection: ConnectionRequest) -> Self {
+    pub(super) fn accept(
+        worker: &Rc<Worker>,
+        connection: ConnectionRequest,
+    ) -> Result<Self, Error> {
         #[allow(invalid_value)]
         let params = ucp_ep_params {
             field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST.0 as u64,
@@ -65,16 +71,16 @@ impl Endpoint {
         Endpoint::create(worker, params)
     }
 
-    fn create(worker: &Rc<Worker>, params: ucp_ep_params) -> Self {
+    fn create(worker: &Rc<Worker>, params: ucp_ep_params) -> Result<Self, Error> {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status)?;
         let handle = unsafe { handle.assume_init() };
         trace!("create endpoint={:?}", handle);
-        Endpoint {
+        Ok(Endpoint {
             handle,
             worker: worker.clone(),
-        }
+        })
     }
 
     pub fn print_to_stderr(&self) {
@@ -82,7 +88,7 @@ impl Endpoint {
     }
 
     /// This routine flushes all outstanding AMO and RMA communications on the endpoint.
-    pub async fn flush(&self) {
+    pub async fn flush(&self) -> Result<(), Error> {
         trace!("flush: endpoint={:?}", self.handle);
         unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
             trace!("flush: complete");
@@ -92,14 +98,16 @@ impl Endpoint {
         let status = unsafe { ucp_ep_flush_nb(self.handle, 0, Some(callback)) };
         if status.is_null() {
             trace!("flush: complete");
+            Ok(())
         } else if UCS_PTR_IS_PTR(status) {
             RequestHandle {
                 ptr: status,
                 poll_fn: poll_normal,
             }
             .await;
+            Ok(())
         } else {
-            panic!("failed to flush endpoint: {:?}", UCS_PTR_RAW_STATUS(status));
+            Error::from_ptr(status)
         }
     }
 
