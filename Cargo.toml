@@ -21,6 +21,7 @@ log = "0.4"
 tokio = { version = "1.0", features = ["net"], optional = true }
 crossbeam = { version = "0.8", optional = true }
 derivative = "2.2.0"
+thiserror = "1.0"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["rt", "time", "macros", "sync"] }

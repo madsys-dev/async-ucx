@@ -26,42 +26,73 @@ macro_rules! spawn_thread {
 pub mod ucp;
 
 #[repr(i8)]
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum Error {
+    #[error("Operation in progress")]
     Inprogress,
-
+    #[error("No pending message")]
     NoMessage,
+    #[error("No resources are available to initiate the operation")]
     NoReource,
+    #[error("Input/output error")]
     IoError,
+    #[error("Out of memory")]
     NoMemory,
+    #[error("Invalid parameter")]
     InvalidParam,
+    #[error("Destination is unreachable")]
     Unreachable,
+    #[error("Address not valid")]
     InvalidAddr,
+    #[error("Function not implemented")]
     NotImplemented,
+    #[error("Message truncated")]
     MessageTruncated,
+    #[error("No progress")]
     NoProgress,
+    #[error("Provided buffer is too small")]
     BufferTooSmall,
+    #[error("No such element")]
     NoElem,
+    #[error("Failed to connect some of the requested endpoints")]
     SomeConnectsFailed,
+    #[error("No such device")]
     NoDevice,
+    #[error("Device is busy")]
     Busy,
+    #[error("Request canceled")]
     Canceled,
+    #[error("Shared memory error")]
     ShmemSegment,
+    #[error("Element already exists")]
     AlreadyExists,
+    #[error("Index out of range")]
     OutOfRange,
+    #[error("Operation timed out")]
     Timeout,
+    #[error("User-defined limit was reached")]
     ExceedsLimit,
+    #[error("Unsupported operation")]
     Unsupported,
+    #[error("Operation rejected by remote peer")]
     Rejected,
+    #[error("Endpoint is not connected")]
     NotConnected,
+    #[error("Connection reset by remote peer")]
     ConnectionReset,
 
+    #[error("First link failure")]
     FirstLinkFailure,
+    #[error("Last link failure")]
     LastLinkFailure,
+    #[error("First endpoint failure")]
     FirstEndpointFailure,
+    #[error("Last endpoint failure")]
     LastEndpointFailure,
+    #[error("Endpoint timeout")]
     EndpointTimeout,
 
+    #[error("Unknown error")]
     Unknown,
 }
 
@@ -127,48 +158,3 @@ impl Error {
         }
     }
 }
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let msg = match self {
-            Error::Inprogress => "Operation in progress",
-            Error::NoMessage => "No pending message",
-            Error::NoReource => "No resources are available to initiate the operation",
-            Error::IoError => "Input/output error",
-            Error::NoMemory => "Out of memory",
-            Error::InvalidParam => "Invalid parameter",
-            Error::Unreachable => "Destination is unreachable",
-            Error::InvalidAddr => "Address not valid",
-            Error::NotImplemented => "Function not implemented",
-            Error::MessageTruncated => "Message truncated",
-            Error::NoProgress => "No progress",
-            Error::BufferTooSmall => "Provided buffer is too small",
-            Error::NoElem => "No such element",
-            Error::SomeConnectsFailed => "Failed to connect some of the requested endpoints",
-            Error::NoDevice => "No such device",
-            Error::Busy => "Device is busy",
-            Error::Canceled => "Request canceled",
-            Error::ShmemSegment => "Shared memory error",
-            Error::AlreadyExists => "Element already exists",
-            Error::OutOfRange => "Index out of range",
-            Error::Timeout => "Operation timed out",
-            Error::ExceedsLimit => "User-defined limit was reached",
-            Error::Unsupported => "Unsupported operation",
-            Error::Rejected => "Operation rejected by remote peer",
-            Error::NotConnected => "Endpoint is not connected",
-            Error::ConnectionReset => "Connection reset by remote peer",
-
-            Error::FirstLinkFailure => "First link failure",
-            Error::LastLinkFailure => "Last link failure",
-            Error::FirstEndpointFailure => "First endpoint failure",
-            Error::LastEndpointFailure => "Last endpoint failure",
-            Error::EndpointTimeout => "Endpoint timeout",
-
-            Error::Unknown => "Unknown error",
-        };
-
-        f.write_str(msg)
-    }
-}
-
-impl std::error::Error for Error {}
