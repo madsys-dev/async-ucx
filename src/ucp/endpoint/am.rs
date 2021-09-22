@@ -462,7 +462,7 @@ impl Endpoint {
         need_reply: bool,
         proto: Option<AmProto>,
     ) -> Result<(), Error> {
-        let endpoint = self.handle;
+        let endpoint = self.get_handle()?;
         am_send(endpoint, id, header, data, need_reply, proto).await
     }
 }
@@ -577,9 +577,13 @@ mod tests {
         let listen_port = listener.socket_addr().unwrap().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let endpoint2 = worker2.connect(addr).unwrap();
-        let conn1 = listener.next().await;
-        let endpoint1 = worker1.accept(conn1).unwrap();
+        let (endpoint1, endpoint2) = tokio::join!(
+            async {
+                let conn1 = listener.next().await;
+                worker1.accept(conn1).await.unwrap()
+            },
+            async { worker2.connect_socket(addr).await.unwrap() },
+        );
 
         let stream1 = worker1.am_stream(16).unwrap();
         let stream2 = worker2.am_stream(12).unwrap();
@@ -635,7 +639,7 @@ mod tests {
             }
         );
 
-        endpoint1.close().await;
-        endpoint2.close().await;
+        assert_eq!(endpoint1.close(false).await, Ok(()));
+        assert_eq!(endpoint2.close(false).await, Err(Error::ConnectionReset));
     }
 }

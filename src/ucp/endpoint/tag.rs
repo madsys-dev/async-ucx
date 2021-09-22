@@ -112,7 +112,7 @@ impl Endpoint {
         }
         let status = unsafe {
             ucp_tag_send_nb(
-                self.handle,
+                self.get_handle()?,
                 buf.as_ptr() as _,
                 buf.len() as _,
                 ucp_dt_make_contig(1),
@@ -151,7 +151,7 @@ impl Endpoint {
         }
         let status = unsafe {
             ucp_tag_send_nb(
-                self.handle,
+                self.get_handle()?,
                 iov.as_ptr() as _,
                 iov.len() as _,
                 ucp_dt_type::UCP_DATATYPE_IOV as _,
@@ -214,9 +214,14 @@ mod tests {
         println!("listen at port {}", listen_port);
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let endpoint2 = worker2.connect(addr).unwrap();
-        let conn1 = listener.next().await;
-        let endpoint1 = worker1.accept(conn1).unwrap();
+
+        let (endpoint1, endpoint2) = tokio::join!(
+            async {
+                let conn1 = listener.next().await;
+                worker1.accept(conn1).await.unwrap()
+            },
+            async { worker2.connect_socket(addr).await.unwrap() },
+        );
 
         // send tag message
         tokio::join!(
@@ -235,7 +240,7 @@ mod tests {
         );
 
         // close endpoint1 & endpont2, drop them directly will cause deadlock
-        endpoint1.close().await;
-        endpoint2.close().await;
+        assert_eq!(endpoint1.close(false).await, Ok(()));
+        assert_eq!(endpoint2.close(false).await, Err(Error::ConnectionReset));
     }
 }

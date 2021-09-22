@@ -24,7 +24,10 @@ async fn client(server_addr: String) -> Result<()> {
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let endpoint = worker.connect(server_addr.parse().unwrap()).unwrap();
+    let endpoint = worker
+        .connect_socket(server_addr.parse().unwrap())
+        .await
+        .unwrap();
     endpoint.print_to_stderr();
 
     endpoint.stream_send(b"Hello!").await.unwrap();
@@ -46,7 +49,7 @@ async fn server() -> Result<()> {
         .unwrap();
     println!("listening on {}", listener.socket_addr().unwrap());
     let connection = listener.next().await;
-    let endpoint = worker.accept(connection).unwrap();
+    let endpoint = worker.accept(connection).await.unwrap();
     println!("accept");
     endpoint.print_to_stderr();
 

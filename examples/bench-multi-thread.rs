@@ -30,7 +30,10 @@ async fn client(server_addr: String) -> ! {
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let endpoint = worker.connect(server_addr.parse().unwrap()).unwrap();
+    let endpoint = worker
+        .connect_socket(server_addr.parse().unwrap())
+        .await
+        .unwrap();
     endpoint.print_to_stderr();
 
     let mut tag = [MaybeUninit::uninit(); 8];
@@ -128,7 +131,7 @@ impl WorkerThread {
             local.block_on(&rt, async move {
                 while let Some(conn) = recver.recv().await {
                     let addr = conn.remote_addr().unwrap();
-                    let ep = worker.accept(conn).unwrap();
+                    let ep = worker.accept(conn).await.unwrap();
                     handle_ep(ep, addr, counter1.clone());
                 }
             });

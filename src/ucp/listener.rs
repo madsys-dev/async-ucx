@@ -132,15 +132,16 @@ mod tests {
             let listen_port = listener.socket_addr().unwrap().port();
             sender.send(listen_port).unwrap();
             let conn = listener.next().await;
-            let _endpoint = worker.accept(conn).unwrap();
+            let _endpoint = worker.accept(conn).await.unwrap();
         });
         spawn_thread!(async move {
             let context = Context::new().unwrap();
             let worker = context.create_worker().unwrap();
+            tokio::task::spawn_local(worker.clone().polling());
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
             let listen_port = recver.await.unwrap();
             addr.set_port(listen_port);
-            let _endpoint = worker.connect(addr).unwrap();
+            let _endpoint = worker.connect_socket(addr).await.unwrap();
         });
         f1.join().unwrap();
     }
