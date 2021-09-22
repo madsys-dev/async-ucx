@@ -8,7 +8,6 @@ description = "Async Rust bindings to OpenUCX."
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["am"]
 event = ["tokio"]
 am = ["tokio", "crossbeam"]
 

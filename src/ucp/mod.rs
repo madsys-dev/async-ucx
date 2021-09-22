@@ -83,10 +83,17 @@ impl Context {
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP
                 | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
+            #[cfg(feature = "am")]
             features: (ucp_feature::UCP_FEATURE_RMA
                 | ucp_feature::UCP_FEATURE_TAG
                 | ucp_feature::UCP_FEATURE_STREAM
                 | ucp_feature::UCP_FEATURE_AM
+                | ucp_feature::UCP_FEATURE_WAKEUP)
+                .0 as u64,
+            #[cfg(not(feature = "am"))]
+            features: (ucp_feature::UCP_FEATURE_RMA
+                | ucp_feature::UCP_FEATURE_TAG
+                | ucp_feature::UCP_FEATURE_STREAM
                 | ucp_feature::UCP_FEATURE_WAKEUP)
                 .0 as u64,
             request_size: std::mem::size_of::<Request>() as u64,
