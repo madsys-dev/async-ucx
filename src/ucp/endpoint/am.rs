@@ -260,7 +260,9 @@ impl<'a> AmMsg<'a> {
     }
 
     /// Send reply
-    pub async fn reply(
+    /// # Safety
+    /// User needs to ensure that the endpoint isn't closed.
+    pub async unsafe fn reply(
         &self,
         id: u32,
         header: &[u8],
@@ -276,7 +278,9 @@ impl<'a> AmMsg<'a> {
     }
 
     /// Send reply
-    pub async fn reply_vectorized(
+    /// # Safety
+    /// User needs to ensure that the endpoint isn't closed.
+    pub async unsafe fn reply_vectorized(
         &self,
         id: u32,
         header: &[u8],
@@ -408,7 +412,8 @@ impl Worker {
     }
 
     /// Register active message handler for `id`.
-    /// # Safety: This method is not concurrent safe with `Worker::polling` or `Worker::event_poll`
+    /// # Safety
+    /// This method is not concurrent safe with `Worker::polling` or `Worker::event_poll`
     pub unsafe fn am_register(
         &self,
         id: u16,
@@ -615,7 +620,7 @@ mod tests {
         tokio::join!(
             async {
                 // send reply
-                let result = msg.reply(12, &header, &data, false, None).await;
+                let result = unsafe { msg.reply(12, &header, &data, false, None).await };
                 assert!(result.is_ok());
             },
             async {
