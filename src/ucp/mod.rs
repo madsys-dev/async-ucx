@@ -76,6 +76,14 @@ impl Context {
 
     /// Creates and initializes a UCP application context with specified configuration.
     pub fn new_with_config(config: &Config) -> Result<Arc<Self>, Error> {
+        let features = ucp_feature::UCP_FEATURE_RMA
+            | ucp_feature::UCP_FEATURE_TAG
+            | ucp_feature::UCP_FEATURE_STREAM
+            | ucp_feature::UCP_FEATURE_WAKEUP;
+        #[cfg(feature = "am")]
+        let features = features | ucp_feature::UCP_FEATURE_AM;
+
+        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_params_t {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
@@ -83,19 +91,7 @@ impl Context {
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP
                 | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
-            #[cfg(feature = "am")]
-            features: (ucp_feature::UCP_FEATURE_RMA
-                | ucp_feature::UCP_FEATURE_TAG
-                | ucp_feature::UCP_FEATURE_STREAM
-                | ucp_feature::UCP_FEATURE_AM
-                | ucp_feature::UCP_FEATURE_WAKEUP)
-                .0 as u64,
-            #[cfg(not(feature = "am"))]
-            features: (ucp_feature::UCP_FEATURE_RMA
-                | ucp_feature::UCP_FEATURE_TAG
-                | ucp_feature::UCP_FEATURE_STREAM
-                | ucp_feature::UCP_FEATURE_WAKEUP)
-                .0 as u64,
+            features: features.0 as u64,
             request_size: std::mem::size_of::<Request>() as u64,
             request_init: Some(Request::init),
             request_cleanup: Some(Request::cleanup),
@@ -135,6 +131,7 @@ impl Context {
     /// Fetches information about the context.
     pub fn query(&self) -> Result<ucp_context_attr, Error> {
         #[allow(invalid_value)]
+        #[allow(clippy::uninit_assumed_init)]
         let mut attr = ucp_context_attr {
             field_mask: (ucp_context_attr_field::UCP_ATTR_FIELD_REQUEST_SIZE
                 | ucp_context_attr_field::UCP_ATTR_FIELD_THREAD_MODE)

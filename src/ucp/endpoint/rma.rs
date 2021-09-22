@@ -9,6 +9,7 @@ pub struct MemoryHandle {
 impl MemoryHandle {
     pub fn register(context: &Arc<Context>, region: &mut [u8]) -> Self {
         #[allow(invalid_value)]
+        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_mem_map_params_t {
             field_mask: (ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_ADDRESS
                 | ucp_mem_map_params_field::UCP_MEM_MAP_PARAM_FIELD_LENGTH)

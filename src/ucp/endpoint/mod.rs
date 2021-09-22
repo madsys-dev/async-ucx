@@ -26,6 +26,7 @@ impl Endpoint {
     pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Result<Self, Error> {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         #[allow(invalid_value)]
+        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
                 | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR
@@ -47,6 +48,7 @@ impl Endpoint {
         addr: *const ucp_address_t,
     ) -> Result<Self, Error> {
         #[allow(invalid_value)]
+        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS
                 | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
@@ -63,6 +65,7 @@ impl Endpoint {
         connection: ConnectionRequest,
     ) -> Result<Self, Error> {
         #[allow(invalid_value)]
+        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_ep_params {
             field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST.0 as u64,
             conn_request: connection.handle,
