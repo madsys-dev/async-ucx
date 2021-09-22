@@ -1,3 +1,5 @@
+use crate::Error;
+
 use super::*;
 use futures::channel::mpsc;
 use futures::stream::StreamExt;
@@ -22,23 +24,24 @@ unsafe impl Send for ConnectionRequest {}
 
 impl ConnectionRequest {
     /// The address of the remote client that sent the connection request to the server.
-    pub fn remote_addr(&self) -> SocketAddr {
+    pub fn remote_addr(&self) -> Result<SocketAddr, Error> {
         let mut attr = ucp_conn_request_attr {
             field_mask: ucp_conn_request_attr_field::UCP_CONN_REQUEST_ATTR_FIELD_CLIENT_ADDR.0
                 as u64,
             ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         let status = unsafe { ucp_conn_request_query(self.handle, &mut attr) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status)?;
+
         let sockaddr = unsafe {
             os_socketaddr::OsSocketAddr::from_raw_parts(&attr.client_address as *const _ as _, 8)
         };
-        sockaddr.into_addr().unwrap()
+        Ok(sockaddr.into_addr().unwrap())
     }
 }
 
 impl Listener {
-    pub(super) fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Self {
+    pub(super) fn new(worker: &Rc<Worker>, addr: SocketAddr) -> Result<Self, Error> {
         unsafe extern "C" fn connect_handler(conn_request: ucp_conn_request_h, arg: *mut c_void) {
             trace!("connect request={:?}", conn_request);
             let sender = &*(arg as *const mpsc::UnboundedSender<ConnectionRequest>);
@@ -69,27 +72,28 @@ impl Listener {
         };
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_listener_create(worker.handle, &params, handle.as_mut_ptr()) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status)?;
         trace!("create listener={:?}", handle);
-        Listener {
+        Ok(Listener {
             handle: unsafe { handle.assume_init() },
             sender,
             recver,
-        }
+        })
     }
 
-    pub fn socket_addr(&self) -> SocketAddr {
+    pub fn socket_addr(&self) -> Result<SocketAddr, Error> {
         #[allow(clippy::uninit_assumed_init)]
         let mut attr = ucp_listener_attr_t {
             field_mask: ucp_listener_attr_field::UCP_LISTENER_ATTR_FIELD_SOCKADDR.0 as u64,
             sockaddr: unsafe { MaybeUninit::uninit().assume_init() },
         };
         let status = unsafe { ucp_listener_query(self.handle, &mut attr) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status)?;
         let sockaddr = unsafe {
             os_socketaddr::OsSocketAddr::from_raw_parts(&attr.sockaddr as *const _ as _, 8)
         };
-        sockaddr.into_addr().unwrap()
+
+        Ok(sockaddr.into_addr().unwrap())
     }
 
     pub async fn next(&mut self) -> ConnectionRequest {
@@ -97,9 +101,9 @@ impl Listener {
     }
 
     /// Reject a connection.
-    pub fn reject(&self, conn: ConnectionRequest) {
+    pub fn reject(&self, conn: ConnectionRequest) -> Result<(), Error> {
         let status = unsafe { ucp_listener_reject(self.handle, conn.handle) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status)
     }
 }
 
@@ -114,27 +118,28 @@ impl Drop for Listener {
 mod tests {
     use super::*;
 
-    #[test]
+    #[test_env_log::test]
     fn accept() {
-        env_logger::init();
         let (sender, recver) = tokio::sync::oneshot::channel();
         let f1 = spawn_thread!(async move {
-            let context = Context::new();
-            let worker = context.create_worker();
+            let context = Context::new().unwrap();
+            let worker = context.create_worker().unwrap();
             tokio::task::spawn_local(worker.clone().polling());
-            let mut listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
-            let listen_port = listener.socket_addr().port();
+            let mut listener = worker
+                .create_listener("0.0.0.0:0".parse().unwrap())
+                .unwrap();
+            let listen_port = listener.socket_addr().unwrap().port();
             sender.send(listen_port).unwrap();
             let conn = listener.next().await;
-            let _endpoint = worker.accept(conn);
+            let _endpoint = worker.accept(conn).unwrap();
         });
         spawn_thread!(async move {
-            let context = Context::new();
-            let worker = context.create_worker();
+            let context = Context::new().unwrap();
+            let worker = context.create_worker().unwrap();
             let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
             let listen_port = recver.await.unwrap();
             addr.set_port(listen_port);
-            let _endpoint = worker.connect(addr);
+            let _endpoint = worker.connect(addr).unwrap();
         });
         f1.join().unwrap();
     }

@@ -13,6 +13,8 @@ mod endpoint;
 mod listener;
 mod worker;
 
+use crate::Error;
+
 pub use self::endpoint::*;
 pub use self::listener::*;
 pub use self::worker::*;
@@ -27,7 +29,8 @@ impl Default for Config {
     fn default() -> Self {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_config_read(null(), null(), handle.as_mut_ptr()) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status).unwrap();
+
         Config {
             handle: unsafe { handle.assume_init() },
         }
@@ -67,12 +70,12 @@ unsafe impl Sync for Context {}
 
 impl Context {
     /// Creates and initializes a UCP application context with default configuration.
-    pub fn new() -> Arc<Self> {
+    pub fn new() -> Result<Arc<Self>, Error> {
         Self::new_with_config(&Config::default())
     }
 
     /// Creates and initializes a UCP application context with specified configuration.
-    pub fn new_with_config(config: &Config) -> Arc<Self> {
+    pub fn new_with_config(config: &Config) -> Result<Arc<Self>, Error> {
         let params = ucp_params_t {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
@@ -80,6 +83,14 @@ impl Context {
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_CLEANUP
                 | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
+            #[cfg(feature = "am")]
+            features: (ucp_feature::UCP_FEATURE_RMA
+                | ucp_feature::UCP_FEATURE_TAG
+                | ucp_feature::UCP_FEATURE_STREAM
+                | ucp_feature::UCP_FEATURE_AM
+                | ucp_feature::UCP_FEATURE_WAKEUP)
+                .0 as u64,
+            #[cfg(not(feature = "am"))]
             features: (ucp_feature::UCP_FEATURE_RMA
                 | ucp_feature::UCP_FEATURE_TAG
                 | ucp_feature::UCP_FEATURE_STREAM
@@ -101,14 +112,15 @@ impl Context {
                 handle.as_mut_ptr(),
             )
         };
-        assert_eq!(status, ucs_status_t::UCS_OK);
-        Arc::new(Context {
+        Error::from_status(status)?;
+
+        Ok(Arc::new(Context {
             handle: unsafe { handle.assume_init() },
-        })
+        }))
     }
 
     /// Create a `Worker` object.
-    pub fn create_worker(self: &Arc<Self>) -> Rc<Worker> {
+    pub fn create_worker(self: &Arc<Self>) -> Result<Rc<Worker>, Error> {
         Worker::new(self)
     }
 
@@ -121,7 +133,7 @@ impl Context {
     }
 
     /// Fetches information about the context.
-    pub fn query(&self) -> ucp_context_attr {
+    pub fn query(&self) -> Result<ucp_context_attr, Error> {
         #[allow(invalid_value)]
         let mut attr = ucp_context_attr {
             field_mask: (ucp_context_attr_field::UCP_ATTR_FIELD_REQUEST_SIZE
@@ -130,8 +142,9 @@ impl Context {
             ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         let status = unsafe { ucp_context_query(self.handle, &mut attr) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
-        attr
+        Error::from_status(status)?;
+
+        Ok(attr)
     }
 }
 

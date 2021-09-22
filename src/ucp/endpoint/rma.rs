@@ -102,7 +102,7 @@ impl Drop for RKey {
 }
 
 impl Endpoint {
-    pub async fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) {
+    pub async fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) -> Result<(), Error> {
         trace!("put: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
             trace!("put: complete. req={:?}, status={:?}", request, status);
@@ -121,18 +121,19 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("put: complete.");
+            Ok(())
         } else if UCS_PTR_IS_PTR(status) {
             RequestHandle {
                 ptr: status,
                 poll_fn: poll_normal,
             }
-            .await;
+            .await
         } else {
-            panic!("failed to put: {:?}", UCS_PTR_RAW_STATUS(status));
+            Error::from_ptr(status)
         }
     }
 
-    pub async fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) {
+    pub async fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) -> Result<(), Error> {
         trace!("get: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
             trace!("get: complete. req={:?}, status={:?}", request, status);
@@ -151,14 +152,15 @@ impl Endpoint {
         };
         if status.is_null() {
             trace!("get: complete.");
+            Ok(())
         } else if UCS_PTR_IS_PTR(status) {
             RequestHandle {
                 ptr: status,
                 poll_fn: poll_normal,
             }
-            .await;
+            .await
         } else {
-            panic!("failed to get: {:?}", UCS_PTR_RAW_STATUS(status));
+            Error::from_ptr(status)
         }
     }
 }
@@ -166,27 +168,29 @@ impl Endpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
+    #[test_env_log::test]
     fn put_get() {
         spawn_thread!(_put_get()).join().unwrap();
     }
 
     async fn _put_get() {
-        let context1 = Context::new();
-        let worker1 = context1.create_worker();
-        let context2 = Context::new();
-        let worker2 = context2.create_worker();
+        let context1 = Context::new().unwrap();
+        let worker1 = context1.create_worker().unwrap();
+        let context2 = Context::new().unwrap();
+        let worker2 = context2.create_worker().unwrap();
         tokio::task::spawn_local(worker1.clone().polling());
         tokio::task::spawn_local(worker2.clone().polling());
 
         // connect with each other
-        let mut listener = worker1.create_listener("0.0.0.0:0".parse().unwrap());
-        let listen_port = listener.socket_addr().port();
+        let mut listener = worker1
+            .create_listener("0.0.0.0:0".parse().unwrap())
+            .unwrap();
+        let listen_port = listener.socket_addr().unwrap().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let endpoint2 = worker2.connect(addr);
+        let endpoint2 = worker2.connect(addr).unwrap();
         let conn1 = listener.next().await;
-        let _endpoint1 = worker1.accept(conn1);
+        let endpoint1 = worker1.accept(conn1).unwrap();
 
         let mut buf1: Vec<u8> = vec![0; 0x1000];
         let mut buf2: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
@@ -199,14 +203,25 @@ mod tests {
         // test put
         endpoint2
             .put(&buf2[..], buf1.as_mut_ptr() as u64, &rkey2)
-            .await;
+            .await
+            .unwrap();
+        // The completion of the put operation only means that the reference to the buffer can be released.
+        // Remote side may can't see the result of put operation, need flush or barray.
+        // Otherwise, there is a certain chance that the test will fail.
+        endpoint1.flush().await.unwrap();
+        endpoint2.flush().await.unwrap();
         assert_eq!(&buf1[..], &buf2[..]);
 
         // test get
         buf1.iter_mut().for_each(|x| *x = 0);
         endpoint2
             .get(&mut buf2[..], buf1.as_ptr() as u64, &rkey2)
-            .await;
+            .await
+            .unwrap();
         assert_eq!(&buf1[..], &buf2[..]);
+
+        // close endpoint1 & endpont2, drop them directly will cause deadlock
+        endpoint1.close().await;
+        endpoint2.close().await;
     }
 }

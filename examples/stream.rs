@@ -16,40 +16,42 @@ async fn main() -> Result<()> {
 
 async fn client(server_addr: String) -> Result<()> {
     println!("client: connect to {:?}", server_addr);
-    let context = Context::new();
-    let worker = context.create_worker();
+    let context = Context::new().unwrap();
+    let worker = context.create_worker().unwrap();
 
     #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let endpoint = worker.connect(server_addr.parse().unwrap());
+    let endpoint = worker.connect(server_addr.parse().unwrap()).unwrap();
     endpoint.print_to_stderr();
 
-    endpoint.stream_send(b"Hello!").await;
+    endpoint.stream_send(b"Hello!").await.unwrap();
     Ok(())
 }
 
 async fn server() -> Result<()> {
     println!("server");
-    let context = Context::new();
-    let worker = context.create_worker();
+    let context = Context::new().unwrap();
+    let worker = context.create_worker().unwrap();
 
     #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let mut listener = worker.create_listener("0.0.0.0:10000".parse().unwrap());
-    println!("listening on {}", listener.socket_addr());
+    let mut listener = worker
+        .create_listener("0.0.0.0:10000".parse().unwrap())
+        .unwrap();
+    println!("listening on {}", listener.socket_addr().unwrap());
     let connection = listener.next().await;
-    let endpoint = worker.accept(connection);
+    let endpoint = worker.accept(connection).unwrap();
     println!("accept");
     endpoint.print_to_stderr();
 
     let mut buf = [MaybeUninit::uninit(); 10];
-    let len = endpoint.stream_recv(&mut buf).await;
+    let len = endpoint.stream_recv(&mut buf).await.unwrap();
     let msg = std::str::from_utf8(unsafe { transmute(&buf[..len]) });
     println!("recv: {:?}", msg);
     Ok(())

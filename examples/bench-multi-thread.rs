@@ -23,24 +23,24 @@ async fn main() -> Result<()> {
 async fn client(server_addr: String) -> ! {
     println!("client: connect to {:?}", server_addr);
 
-    let context = Context::new();
-    let worker = context.create_worker();
+    let context = Context::new().unwrap();
+    let worker = context.create_worker().unwrap();
     #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let endpoint = worker.connect(server_addr.parse().unwrap());
+    let endpoint = worker.connect(server_addr.parse().unwrap()).unwrap();
     endpoint.print_to_stderr();
 
     let mut tag = [MaybeUninit::uninit(); 8];
-    endpoint.worker().tag_recv(100, &mut tag).await;
+    endpoint.worker().tag_recv(100, &mut tag).await.unwrap();
     let tag: u64 = unsafe { std::mem::transmute(tag) };
     println!("client: got tag {:#x}", tag);
 
     let long_msg: Vec<u8> = (0..8).map(|x| x as u8).collect();
     loop {
-        endpoint.tag_send(tag, &long_msg).await;
+        endpoint.tag_send(tag, &long_msg).await.unwrap();
         for _ in 0..500 {
             std::hint::spin_loop();
         }
@@ -53,7 +53,7 @@ async fn client(server_addr: String) -> ! {
 
 async fn server() -> ! {
     println!("server");
-    let context = Context::new();
+    let context = Context::new().unwrap();
     let mut worker_threads = vec![];
     let mut counters = vec![];
     for _ in 0..4 {
@@ -63,11 +63,11 @@ async fn server() -> ! {
                 let mut hasher = DefaultHasher::new();
                 addr.hash(&mut hasher);
                 let tag = hasher.finish();
-                ep.tag_send(100, &tag.to_ne_bytes()).await;
+                ep.tag_send(100, &tag.to_ne_bytes()).await.unwrap();
 
                 let mut buf = vec![MaybeUninit::uninit(); 50000];
                 loop {
-                    ep.worker().tag_recv(tag, &mut buf).await;
+                    ep.worker().tag_recv(tag, &mut buf).await.unwrap();
                     // ep.tag_send(tag, &[0]).await;
                     unsafe { *(&*counter as *const AtomicUsize as *mut usize) += 1 };
                 }
@@ -77,13 +77,15 @@ async fn server() -> ! {
         worker_threads.push(wt);
     }
 
-    let worker = context.create_worker();
+    let worker = context.create_worker().unwrap();
     #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let mut listener = worker.create_listener("0.0.0.0:0".parse().unwrap());
+    let mut listener = worker
+        .create_listener("0.0.0.0:0".parse().unwrap())
+        .unwrap();
     tokio::task::spawn_local(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -91,7 +93,7 @@ async fn server() -> ! {
             println!("{} IOPS", count);
         }
     });
-    println!("listening on {}", listener.socket_addr());
+    println!("listening on {}", listener.socket_addr().unwrap());
 
     for i in 0.. {
         let conn = listener.next().await;
@@ -113,7 +115,7 @@ impl WorkerThread {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter1 = counter.clone();
         std::thread::spawn(move || {
-            let worker = context.create_worker();
+            let worker = context.create_worker().unwrap();
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -125,8 +127,8 @@ impl WorkerThread {
             local.spawn_local(worker.clone().event_poll());
             local.block_on(&rt, async move {
                 while let Some(conn) = recver.recv().await {
-                    let addr = conn.remote_addr();
-                    let ep = worker.accept(conn);
+                    let addr = conn.remote_addr().unwrap();
+                    let ep = worker.accept(conn).unwrap();
                     handle_ep(ep, addr, counter1.clone());
                 }
             });

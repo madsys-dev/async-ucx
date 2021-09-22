@@ -4,10 +4,14 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Poll;
 
+#[cfg(feature = "am")]
+mod am;
 mod rma;
 mod stream;
 mod tag;
 
+#[cfg(feature = "am")]
+pub use self::am::*;
 pub use self::rma::*;
 pub use self::stream::*;
 pub use self::tag::*;
@@ -19,24 +23,45 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Self {
+    pub(super) fn connect(worker: &Rc<Worker>, addr: SocketAddr) -> Result<Self, Error> {
         let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
         #[allow(invalid_value)]
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_FLAGS
-                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR)
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_SOCK_ADDR
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
                 .0 as u64,
             flags: ucp_ep_params_flags_field::UCP_EP_PARAMS_FLAGS_CLIENT_SERVER.0,
             sockaddr: ucs_sock_addr {
                 addr: sockaddr.as_ptr() as _,
                 addrlen: sockaddr.len(),
             },
+            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
             ..unsafe { MaybeUninit::uninit().assume_init() }
         };
         Endpoint::create(worker, params)
     }
 
-    pub(super) fn accept(worker: &Rc<Worker>, connection: ConnectionRequest) -> Self {
+    pub(super) fn connect_addr(
+        worker: &Rc<Worker>,
+        addr: *const ucp_address_t,
+    ) -> Result<Self, Error> {
+        #[allow(invalid_value)]
+        let params = ucp_ep_params {
+            field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS
+                | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
+                .0 as u64,
+            address: addr,
+            err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
+            ..unsafe { MaybeUninit::uninit().assume_init() }
+        };
+        Endpoint::create(worker, params)
+    }
+
+    pub(super) fn accept(
+        worker: &Rc<Worker>,
+        connection: ConnectionRequest,
+    ) -> Result<Self, Error> {
         #[allow(invalid_value)]
         let params = ucp_ep_params {
             field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST.0 as u64,
@@ -46,16 +71,16 @@ impl Endpoint {
         Endpoint::create(worker, params)
     }
 
-    fn create(worker: &Rc<Worker>, params: ucp_ep_params) -> Self {
+    fn create(worker: &Rc<Worker>, params: ucp_ep_params) -> Result<Self, Error> {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
-        assert_eq!(status, ucs_status_t::UCS_OK);
+        Error::from_status(status)?;
         let handle = unsafe { handle.assume_init() };
         trace!("create endpoint={:?}", handle);
-        Endpoint {
+        Ok(Endpoint {
             handle,
             worker: worker.clone(),
-        }
+        })
     }
 
     pub fn print_to_stderr(&self) {
@@ -63,23 +88,25 @@ impl Endpoint {
     }
 
     /// This routine flushes all outstanding AMO and RMA communications on the endpoint.
-    pub async fn flush(&self) {
+    pub async fn flush(&self) -> Result<(), Error> {
         trace!("flush: endpoint={:?}", self.handle);
         unsafe extern "C" fn callback(request: *mut c_void, _status: ucs_status_t) {
             trace!("flush: complete");
-            ucp_request_free(request);
+            let request = &mut *(request as *mut Request);
+            request.waker.wake();
         }
         let status = unsafe { ucp_ep_flush_nb(self.handle, 0, Some(callback)) };
         if status.is_null() {
             trace!("flush: complete");
+            Ok(())
         } else if UCS_PTR_IS_PTR(status) {
             RequestHandle {
                 ptr: status,
                 poll_fn: poll_normal,
             }
-            .await;
+            .await
         } else {
-            panic!("failed to flush endpoint: {:?}", UCS_PTR_RAW_STATUS(status));
+            Error::from_ptr(status)
         }
     }
 
@@ -98,8 +125,11 @@ impl Endpoint {
             while unsafe { poll_normal(status) }.is_pending() {
                 futures_lite::future::yield_now().await;
             }
+            unsafe { ucp_request_free(status as _) };
         } else {
-            panic!("failed to close endpoint: {:?}", UCS_PTR_RAW_STATUS(status));
+            // todo: maybe this shouldn't treat as error ...
+            let status = UCS_PTR_RAW_STATUS(status);
+            warn!("close endpoint get error: {:?}", status);
         }
         std::mem::forget(self);
     }
@@ -141,11 +171,11 @@ impl<T> Drop for RequestHandle<T> {
     }
 }
 
-unsafe fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<()> {
+unsafe fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<Result<(), Error>> {
     let status = ucp_request_check_status(ptr as _);
     if status == ucs_status_t::UCS_INPROGRESS {
         Poll::Pending
     } else {
-        Poll::Ready(())
+        Poll::Ready(Error::from_status(status))
     }
 }
