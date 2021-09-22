@@ -1,11 +1,9 @@
-use crossbeam::queue::SegQueue;
-use tokio::sync::Notify;
-
 use super::*;
+use futures::channel::mpsc;
+use futures::StreamExt;
 use std::{
     io::{IoSlice, IoSliceMut},
     slice,
-    sync::atomic::AtomicBool,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -62,8 +60,7 @@ impl AmData {
     }
 }
 
-struct RawMsg {
-    id: u16,
+pub(crate) struct RawMsg {
     header: Vec<u8>,
     data: Option<AmData>,
     reply_ep: ucp_ep_h,
@@ -71,15 +68,8 @@ struct RawMsg {
 }
 
 impl RawMsg {
-    fn from_raw(
-        id: u16,
-        header: &[u8],
-        data: &'static [u8],
-        reply_ep: ucp_ep_h,
-        attr: u64,
-    ) -> Self {
+    fn from_raw(header: &[u8], data: &'static [u8], reply_ep: ucp_ep_h, attr: u64) -> Self {
         RawMsg {
-            id,
             header: header.to_owned(),
             data: AmData::from_raw(data, attr),
             reply_ep,
@@ -96,11 +86,6 @@ pub struct AmMsg<'a> {
 impl<'a> AmMsg<'a> {
     fn from_raw(worker: &'a Worker, msg: RawMsg) -> Self {
         AmMsg { worker, msg }
-    }
-
-    #[inline]
-    pub fn id(&self) -> u16 {
-        self.msg.id
     }
 
     #[inline]
@@ -242,7 +227,7 @@ impl<'a> AmMsg<'a> {
                     ptr: status,
                     poll_fn: poll_recv,
                 }
-                .await;
+                .await?;
                 Ok(data_len)
             } else {
                 Err(Error::from_ptr(status).unwrap_err())
@@ -307,77 +292,54 @@ impl<'a> Drop for AmMsg<'a> {
     }
 }
 
-#[derive(Clone)]
 pub struct AmStream<'a> {
     worker: &'a Worker,
-    inner: Rc<AmStreamInner>,
+    id: u16,
+    recver: mpsc::UnboundedReceiver<RawMsg>,
 }
+
+pub(crate) type AmMsgSender = mpsc::UnboundedSender<RawMsg>;
 
 impl<'a> AmStream<'a> {
-    fn new(worker: &'a Worker, inner: Rc<AmStreamInner>) -> Self {
-        AmStream { worker, inner }
+    fn new(worker: &'a Worker, id: u16) -> (AmMsgSender, Self) {
+        let (sender, recver) = mpsc::unbounded();
+        let stream = AmStream { worker, id, recver };
+        (sender, stream)
     }
 
     /// Wait active message.
-    pub async fn wait_msg(&self) -> Option<AmMsg<'_>> {
-        self.inner.wait_msg(self.worker).await
+    pub async fn wait_msg(&mut self) -> Option<AmMsg<'a>> {
+        self.recver
+            .next()
+            .await
+            .map(|msg| AmMsg::from_raw(self.worker, msg))
     }
 }
 
-pub(crate) struct AmStreamInner {
-    id: u16,
-    msgs: SegQueue<RawMsg>,
-    notify: Notify,
-    unregistered: AtomicBool,
-}
-
-impl AmStreamInner {
-    // new active message handler
-    fn new(id: u16) -> Self {
-        Self {
-            id,
-            msgs: SegQueue::new(),
-            notify: Notify::new(),
-            unregistered: AtomicBool::new(false),
+impl Drop for AmStream<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.worker
+                .am_register(self.id, None, std::ptr::null_mut())
+                .expect("failed to unregister AM handler");
         }
-    }
-
-    // unregister
-    fn unregister(&self) {
-        self.unregistered
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    // callback function
-    fn callback(&self, header: &[u8], data: &'static [u8], reply: ucp_ep_h, attr: u64) {
-        let msg = RawMsg::from_raw(self.id, header, data, reply, attr);
-        self.msgs.push(msg);
-        self.notify.notify_one();
-    }
-
-    /// Wait active message.
-    async fn wait_msg<'a>(&self, worker: &'a Worker) -> Option<AmMsg<'a>> {
-        // todo: how to make this thread safe?
-        while !self.unregistered.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Some(msg) = self.msgs.pop() {
-                return Some(AmMsg::from_raw(worker, msg));
-            }
-
-            self.notify.notified().await;
-        }
-
-        self.msgs.pop().map(|msg| AmMsg::from_raw(worker, msg))
+        self.worker
+            .am_streams
+            .write()
+            .unwrap()
+            .remove(&self.id)
+            .unwrap();
     }
 }
 
 impl Worker {
     /// Register active message stream for `id`.
+    ///
     /// Message of this `id` can be received with `am_recv`.
+    ///
+    /// # Panics
+    /// This function will panic if the `id` exists.
     pub fn am_stream(&self, id: u16) -> Result<AmStream<'_>, Error> {
-        if let Some(inner) = self.am_streams.read().unwrap().get(&id) {
-            return Ok(AmStream::new(self, inner.clone()));
-        }
-
         unsafe extern "C" fn callback(
             arg: *mut c_void,
             header: *const c_void,
@@ -386,12 +348,13 @@ impl Worker {
             data_len: u64,
             param: *const ucp_am_recv_param_t,
         ) -> ucs_status_t {
-            let handler = &*(arg as *const AmStreamInner);
+            let sender = &*(arg as *const mpsc::UnboundedSender<RawMsg>);
             let header = slice::from_raw_parts(header as *const u8, header_len as usize);
             let data = slice::from_raw_parts(data as *const u8, data_len as usize);
 
             let param = &*param;
-            handler.callback(header, data, param.reply_ep, param.recv_attr);
+            let msg = RawMsg::from_raw(header, data, param.reply_ep, param.recv_attr);
+            sender.unbounded_send(msg).unwrap();
 
             const DATA_FLAG: u64 = ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_DATA as u64
                 | ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FLAG_RNDV as u64;
@@ -402,13 +365,15 @@ impl Worker {
             }
         }
 
-        let stream = Rc::new(AmStreamInner::new(id));
+        let (sender, stream) = AmStream::new(self, id);
+        let sender = Rc::new(sender);
         unsafe {
-            self.am_register(id, Some(callback), Rc::as_ptr(&stream) as _)?;
+            self.am_register(id, Some(callback), Rc::as_ptr(&sender) as _)?;
         }
-        self.am_streams.write().unwrap().insert(id, stream.clone());
+        let ret = self.am_streams.write().unwrap().insert(id, sender);
+        assert!(ret.is_none(), "Active message ID exists");
 
-        return Ok(AmStream::new(self, stream));
+        return Ok(stream);
     }
 
     /// Register active message handler for `id`.
@@ -432,10 +397,6 @@ impl Worker {
         };
         let status = ucp_worker_set_am_recv_handler(self.handle, &param as _);
         Error::from_status(status)?;
-        if let Some(stream) = self.am_streams.write().unwrap().remove(&id) {
-            stream.unregister();
-        }
-
         Ok(())
     }
 }
@@ -541,12 +502,12 @@ async fn am_send(
     }
 }
 
-unsafe fn poll_recv(ptr: ucs_status_ptr_t) -> Poll<()> {
+unsafe fn poll_recv(ptr: ucs_status_ptr_t) -> Poll<Result<(), Error>> {
     let status = ucp_request_check_status(ptr as _);
     if status == ucs_status_t::UCS_INPROGRESS {
         Poll::Pending
     } else {
-        Poll::Ready(())
+        Poll::Ready(Error::from_status(status))
     }
 }
 
@@ -575,14 +536,13 @@ mod tests {
             .create_listener("0.0.0.0:0".parse().unwrap())
             .unwrap();
         let listen_port = listener.socket_addr().unwrap().port();
-        let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        addr.set_port(listen_port);
+        let addr = SocketAddr::from(([127, 0, 0, 1], listen_port));
         let endpoint2 = worker2.connect(addr).unwrap();
         let conn1 = listener.next().await;
         let endpoint1 = worker1.accept(conn1).unwrap();
 
-        let stream1 = worker1.am_stream(16).unwrap();
-        let stream2 = worker2.am_stream(12).unwrap();
+        let mut stream1 = worker1.am_stream(16).unwrap();
+        let mut stream2 = worker2.am_stream(12).unwrap();
 
         let header = vec![1, 2, 3, 4];
         let data = vec![1_u8; data_size];

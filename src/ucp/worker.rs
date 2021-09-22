@@ -17,7 +17,7 @@ pub struct Worker {
     context: Arc<Context>,
     #[cfg(feature = "am")]
     #[derivative(Debug = "ignore")]
-    pub(crate) am_streams: RwLock<HashMap<u16, Rc<AmStreamInner>>>,
+    pub(crate) am_streams: RwLock<HashMap<u16, Rc<AmMsgSender>>>,
 }
 
 impl Drop for Worker {
