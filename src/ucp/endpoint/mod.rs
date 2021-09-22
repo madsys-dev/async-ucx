@@ -104,8 +104,7 @@ impl Endpoint {
                 ptr: status,
                 poll_fn: poll_normal,
             }
-            .await;
-            Ok(())
+            .await
         } else {
             Error::from_ptr(status)
         }
@@ -172,12 +171,11 @@ impl<T> Drop for RequestHandle<T> {
     }
 }
 
-unsafe fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<()> {
+unsafe fn poll_normal(ptr: ucs_status_ptr_t) -> Poll<Result<(), Error>> {
     let status = ucp_request_check_status(ptr as _);
     if status == ucs_status_t::UCS_INPROGRESS {
         Poll::Pending
     } else {
-        assert_eq!(status, ucs_status_t::UCS_OK);
-        Poll::Ready(())
+        Poll::Ready(Error::from_status(status))
     }
 }

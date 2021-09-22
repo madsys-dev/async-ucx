@@ -115,8 +115,8 @@ impl Worker {
         Listener::new(self, addr)
     }
 
-    pub fn connect_addr(self: &Rc<Self>, addr: *const ucp_address_t) -> Result<Endpoint, Error> {
-        Endpoint::connect_addr(self, addr)
+    pub fn connect_addr(self: &Rc<Self>, addr: &WorkerAddress) -> Result<Endpoint, Error> {
+        Endpoint::connect_addr(self, addr.handle)
     }
 
     pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Result<Endpoint, Error> {

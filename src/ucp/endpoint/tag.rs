@@ -127,7 +127,7 @@ impl Endpoint {
                 ptr: status,
                 poll_fn: poll_normal,
             }
-            .await;
+            .await?;
         } else {
             return Err(Error::from_ptr(status).unwrap_err());
         }
@@ -167,7 +167,7 @@ impl Endpoint {
                 ptr: status,
                 poll_fn: poll_normal,
             }
-            .await;
+            .await?;
         } else {
             return Err(Error::from_ptr(status).unwrap_err());
         }

@@ -535,8 +535,7 @@ async fn am_send(
             ptr: status,
             poll_fn: poll_normal,
         }
-        .await;
-        Ok(())
+        .await
     } else {
         Err(Error::from_ptr(status).unwrap_err())
     }
