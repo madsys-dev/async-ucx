@@ -156,14 +156,16 @@ impl<'a> AmMsg<'a> {
     pub async fn recv_data_vectored(&mut self, iov: &[IoSliceMut<'_>]) -> Result<usize, Error> {
         let data = self.msg.data.take();
         if let Some(data) = data {
-            if let AmData::Eager(mut data) = data {
+            if let AmData::Eager(data) = data {
                 // return error if buffer size < data length, same with ucx
                 let cap = iov.iter().fold(0_usize, |cap, buf| cap + buf.len());
-                assert!(cap >= data.len());
+                if cap < data.len() {
+                    return Err(Error::MessageTruncated);
+                }
 
-                let mut copyed = 0_usize;
+                let mut copied = 0_usize;
                 for buf in iov {
-                    let len = std::cmp::min(copyed, buf.len());
+                    let len = std::cmp::min(data.len() - copied, buf.len());
                     if len == 0 {
                         break;
                     }
@@ -171,14 +173,14 @@ impl<'a> AmMsg<'a> {
                     let buf = &buf[..len];
                     unsafe {
                         std::ptr::copy_nonoverlapping(
-                            data[copyed..].as_mut_ptr(),
+                            data[copied..].as_ptr(),
                             buf.as_ptr() as _,
                             len,
                         )
                     }
-                    copyed += len;
+                    copied += len;
                 }
-                return Ok(copyed);
+                return Ok(copied);
             }
 
             let (data_desc, data_len) = match data {
@@ -611,7 +613,9 @@ mod tests {
                 assert_eq!(msg.header(), &header);
                 assert_eq!(msg.contains_data(), true);
                 assert_eq!(msg.data_len(), data.len());
-                let recv_data = msg.recv_data().await.unwrap();
+                let mut recv_data = vec![0_u8; msg.data_len()];
+                let recv_len = msg.recv_data_single(&mut recv_data).await.unwrap();
+                assert_eq!(data.len(), recv_len);
                 assert_eq!(data, recv_data);
                 assert_eq!(msg.contains_data(), false);
                 msg
