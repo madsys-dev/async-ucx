@@ -37,7 +37,7 @@ impl EndpointInner {
         }
     }
 
-    fn close(self: &Rc<Self>) {
+    fn closed(self: &Rc<Self>) {
         if self
             .closed
             .compare_exchange(
@@ -49,7 +49,7 @@ impl EndpointInner {
             .is_ok()
         {
             // release a weak reference
-            let _weak = Rc::downgrade(self);
+            let _weak = unsafe { Weak::from_raw(Rc::as_ptr(self)) };
             self.set_status(ucs_status_t::UCS_ERR_CONNECTION_RESET);
         }
     }
@@ -85,7 +85,7 @@ impl Endpoint {
         let weak = Rc::downgrade(&inner);
 
         // ucp endpoint keep a weak reference to inner
-        // this reference will drop when close endpoint
+        // this reference will drop when endpoint is closed
         let ptr = Weak::into_raw(weak);
         unsafe extern "C" fn callback(arg: *mut c_void, ep: ucp_ep_h, status: ucs_status_t) {
             let weak: Weak<EndpointInner> = Weak::from_raw(arg as _);
@@ -113,7 +113,7 @@ impl Endpoint {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
         if let Err(err) = Error::from_status(status) {
-            // error happended, drop reference
+            // error happened, drop reference
             let _weak = unsafe { Weak::from_raw(ptr as _) };
             return Err(err);
         }
@@ -248,19 +248,24 @@ impl Endpoint {
             ucp_ep_close_mode::UCP_EP_CLOSE_MODE_FLUSH as u32
         };
         let status = unsafe { ucp_ep_close_nb(self.handle, mode) };
-        self.inner.close();
         if status.is_null() {
             trace!("close: complete");
+            self.inner.closed();
             Ok(())
         } else if UCS_PTR_IS_PTR(status) {
-            loop {
+            let result = loop {
                 if let Poll::Ready(result) = unsafe { poll_normal(status) } {
                     unsafe { ucp_request_free(status as _) };
                     break result;
                 } else {
                     futures_lite::future::yield_now().await;
                 }
+            };
+            if result.is_ok() {
+                self.inner.closed();
             }
+
+            result
         } else {
             // todo: maybe this shouldn't treat as error ...
             let status = UCS_PTR_RAW_STATUS(status);
@@ -275,8 +280,8 @@ impl Endpoint {
 
     #[allow(unused)]
     #[cfg(test)]
-    fn rc_cnt(self: &Rc<Self>) -> (usize, usize) {
-        (Rc::strong_count(self), Rc::weak_count(self))
+    fn get_rc(&self) -> (usize, usize) {
+        (Rc::strong_count(&self.inner), Rc::weak_count(&self.inner))
     }
 }
 
@@ -291,6 +296,7 @@ impl Drop for Endpoint {
                 )
             };
             let _ = Error::from_ptr(status).map_err(|err| error!("Failed to force close, {}", err));
+            self.inner.closed();
         }
     }
 }

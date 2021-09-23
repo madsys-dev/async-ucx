@@ -225,8 +225,13 @@ mod tests {
             .unwrap();
         assert_eq!(&buf1[..], &buf2[..]);
 
-        // close endpoint1 & endpont2, drop them directly will cause deadlock
+        assert_eq!(endpoint1.get_rc(), (1, 1));
+        assert_eq!(endpoint2.get_rc(), (1, 1));
         assert_eq!(endpoint1.close(false).await, Ok(()));
         assert_eq!(endpoint2.close(false).await, Err(Error::ConnectionReset));
+        assert_eq!(endpoint1.get_rc(), (1, 0));
+        assert_eq!(endpoint2.get_rc(), (1, 1));
+        assert_eq!(endpoint2.close(true).await, Ok(()));
+        assert_eq!(endpoint2.get_rc(), (1, 0));
     }
 }
