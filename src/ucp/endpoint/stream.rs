@@ -14,7 +14,7 @@ impl Endpoint {
         }
         let status = unsafe {
             ucp_stream_send_nb(
-                self.handle,
+                self.get_handle()?,
                 buf.as_ptr() as _,
                 buf.len() as _,
                 ucp_dt_make_contig(1),
@@ -51,7 +51,7 @@ impl Endpoint {
         let mut length = MaybeUninit::uninit();
         let status = unsafe {
             ucp_stream_recv_nb(
-                self.handle,
+                self.get_handle()?,
                 buf.as_mut_ptr() as _,
                 buf.len() as _,
                 ucp_dt_make_contig(1),

@@ -119,12 +119,12 @@ impl Worker {
         Endpoint::connect_addr(self, addr.handle)
     }
 
-    pub fn connect(self: &Rc<Self>, addr: SocketAddr) -> Result<Endpoint, Error> {
-        Endpoint::connect(self, addr)
+    pub async fn connect_socket(self: &Rc<Self>, addr: SocketAddr) -> Result<Endpoint, Error> {
+        Endpoint::connect_socket(self, addr).await
     }
 
-    pub fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Result<Endpoint, Error> {
-        Endpoint::accept(self, connection)
+    pub async fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Result<Endpoint, Error> {
+        Endpoint::accept(self, connection).await
     }
 
     /// Waits (blocking) until an event has happened.

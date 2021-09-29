@@ -112,7 +112,7 @@ impl Endpoint {
         }
         let status = unsafe {
             ucp_put_nb(
-                self.handle,
+                self.get_handle()?,
                 buf.as_ptr() as _,
                 buf.len() as _,
                 remote_addr,
@@ -143,7 +143,7 @@ impl Endpoint {
         }
         let status = unsafe {
             ucp_get_nb(
-                self.handle,
+                self.get_handle()?,
                 buf.as_mut_ptr() as _,
                 buf.len() as _,
                 remote_addr,
@@ -189,9 +189,13 @@ mod tests {
         let listen_port = listener.socket_addr().unwrap().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let endpoint2 = worker2.connect(addr).unwrap();
-        let conn1 = listener.next().await;
-        let endpoint1 = worker1.accept(conn1).unwrap();
+        let (endpoint1, endpoint2) = tokio::join!(
+            async {
+                let conn1 = listener.next().await;
+                worker1.accept(conn1).await.unwrap()
+            },
+            async { worker2.connect_socket(addr).await.unwrap() },
+        );
 
         let mut buf1: Vec<u8> = vec![0; 0x1000];
         let mut buf2: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
@@ -221,8 +225,13 @@ mod tests {
             .unwrap();
         assert_eq!(&buf1[..], &buf2[..]);
 
-        // close endpoint1 & endpont2, drop them directly will cause deadlock
-        endpoint1.close().await;
-        endpoint2.close().await;
+        assert_eq!(endpoint1.get_rc(), (1, 1));
+        assert_eq!(endpoint2.get_rc(), (1, 1));
+        assert_eq!(endpoint1.close(false).await, Ok(()));
+        assert_eq!(endpoint2.close(false).await, Err(Error::ConnectionReset));
+        assert_eq!(endpoint1.get_rc(), (1, 0));
+        assert_eq!(endpoint2.get_rc(), (1, 1));
+        assert_eq!(endpoint2.close(true).await, Ok(()));
+        assert_eq!(endpoint2.get_rc(), (1, 0));
     }
 }

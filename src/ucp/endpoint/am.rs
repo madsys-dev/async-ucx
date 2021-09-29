@@ -156,14 +156,16 @@ impl<'a> AmMsg<'a> {
     pub async fn recv_data_vectored(&mut self, iov: &[IoSliceMut<'_>]) -> Result<usize, Error> {
         let data = self.msg.data.take();
         if let Some(data) = data {
-            if let AmData::Eager(mut data) = data {
+            if let AmData::Eager(data) = data {
                 // return error if buffer size < data length, same with ucx
                 let cap = iov.iter().fold(0_usize, |cap, buf| cap + buf.len());
-                assert!(cap >= data.len());
+                if cap < data.len() {
+                    return Err(Error::MessageTruncated);
+                }
 
-                let mut copyed = 0_usize;
+                let mut copied = 0_usize;
                 for buf in iov {
-                    let len = std::cmp::min(copyed, buf.len());
+                    let len = std::cmp::min(data.len() - copied, buf.len());
                     if len == 0 {
                         break;
                     }
@@ -171,14 +173,14 @@ impl<'a> AmMsg<'a> {
                     let buf = &buf[..len];
                     unsafe {
                         std::ptr::copy_nonoverlapping(
-                            data[copyed..].as_mut_ptr(),
+                            data[copied..].as_ptr(),
                             buf.as_ptr() as _,
                             len,
                         )
                     }
-                    copyed += len;
+                    copied += len;
                 }
-                return Ok(copyed);
+                return Ok(copied);
             }
 
             let (data_desc, data_len) = match data {
@@ -462,7 +464,7 @@ impl Endpoint {
         need_reply: bool,
         proto: Option<AmProto>,
     ) -> Result<(), Error> {
-        let endpoint = self.handle;
+        let endpoint = self.get_handle()?;
         am_send(endpoint, id, header, data, need_reply, proto).await
     }
 }
@@ -577,9 +579,13 @@ mod tests {
         let listen_port = listener.socket_addr().unwrap().port();
         let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         addr.set_port(listen_port);
-        let endpoint2 = worker2.connect(addr).unwrap();
-        let conn1 = listener.next().await;
-        let endpoint1 = worker1.accept(conn1).unwrap();
+        let (endpoint1, endpoint2) = tokio::join!(
+            async {
+                let conn1 = listener.next().await;
+                worker1.accept(conn1).await.unwrap()
+            },
+            async { worker2.connect_socket(addr).await.unwrap() },
+        );
 
         let stream1 = worker1.am_stream(16).unwrap();
         let stream2 = worker2.am_stream(12).unwrap();
@@ -607,7 +613,9 @@ mod tests {
                 assert_eq!(msg.header(), &header);
                 assert_eq!(msg.contains_data(), true);
                 assert_eq!(msg.data_len(), data.len());
-                let recv_data = msg.recv_data().await.unwrap();
+                let mut recv_data = vec![0_u8; msg.data_len()];
+                let recv_len = msg.recv_data_single(&mut recv_data).await.unwrap();
+                assert_eq!(data.len(), recv_len);
                 assert_eq!(data, recv_data);
                 assert_eq!(msg.contains_data(), false);
                 msg
@@ -635,7 +643,13 @@ mod tests {
             }
         );
 
-        endpoint1.close().await;
-        endpoint2.close().await;
+        assert_eq!(endpoint1.get_rc(), (1, 1));
+        assert_eq!(endpoint2.get_rc(), (1, 1));
+        assert_eq!(endpoint1.close(false).await, Ok(()));
+        assert_eq!(endpoint2.close(false).await, Err(Error::ConnectionReset));
+        assert_eq!(endpoint1.get_rc(), (1, 0));
+        assert_eq!(endpoint2.get_rc(), (1, 1));
+        assert_eq!(endpoint2.close(true).await, Ok(()));
+        assert_eq!(endpoint2.get_rc(), (1, 0));
     }
 }

@@ -25,7 +25,10 @@ async fn client(server_addr: String) -> Result<()> {
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
-    let endpoint = worker.connect(server_addr.parse().unwrap()).unwrap();
+    let endpoint = worker
+        .connect_socket(server_addr.parse().unwrap())
+        .await
+        .unwrap();
 
     println!("send: {:?}", HELLO);
     endpoint.tag_send(100, HELLO.as_bytes()).await.unwrap();
@@ -49,7 +52,7 @@ async fn server() -> Result<()> {
         .unwrap();
     println!("listening on {}", listener.socket_addr().unwrap());
     let connection = listener.next().await;
-    let _endpoint = worker.accept(connection).unwrap();
+    let _endpoint = worker.accept(connection).await.unwrap();
     println!("accept");
 
     let mut buf = [MaybeUninit::uninit(); 0x1005];
