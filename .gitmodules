@@ -1,0 +1,3 @@
+[submodule "ucx-sys/ucx"]
+	path = ucx-sys/ucx
+	url = https://github.com/openucx/ucx.git

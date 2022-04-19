@@ -1,15 +1,23 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
-    // Tell cargo to tell rustc to link the system shared library.
-    println!("cargo:rustc-link-lib=uct");
-    println!("cargo:rustc-link-lib=ucs");
-    println!("cargo:rustc-link-lib=ucm");
-    println!("cargo:rustc-link-lib=ucp");
+    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+
+    // Tell cargo to tell rustc to link the library.
+    println!("cargo:rustc-link-search=native={}/lib", dst.display());
+    println!("cargo:rustc-link-lib=static=uct");
+    println!("cargo:rustc-link-lib=static=ucs");
+    println!("cargo:rustc-link-lib=static=ucm");
+    println!("cargo:rustc-link-lib=static=ucp");
+    println!("cargo:root={}", dst.display());
+    println!("cargo:include={}/include", dst.display());
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
+
+    build_from_source();
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -40,4 +48,57 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+}
+
+fn build_from_source() {
+    let src = env::current_dir().unwrap();
+    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+
+    // Return if the outputs exist.
+    if dst.join("lib/libuct.a").exists()
+        && dst.join("lib/libucs.a").exists()
+        && dst.join("lib/libucm.a").exists()
+        && dst.join("lib/libucp.a").exists()
+    {
+        return;
+    }
+
+    // Initialize git submodule if necessary.
+    if !Path::new("ucx/.git").exists() {
+        let _ = Command::new("git")
+            .args(&["submodule", "update", "--init"])
+            .status();
+    }
+
+    // Create build directory.
+    let _ = std::fs::create_dir(&dst.join("build"));
+
+    // autogen.sh
+    Command::new("sh")
+        .current_dir(&src.join("ucx"))
+        .arg("./autogen.sh")
+        .status()
+        .expect("failed to run autogen.sh");
+
+    // configure
+    Command::new("sh")
+        .current_dir(&dst.join("build"))
+        .arg(&src.join("ucx/contrib/configure-release"))
+        .arg(&format!("--prefix={}", dst.display()))
+        .status()
+        .expect("failed to configure");
+
+    // make
+    Command::new("make")
+        .current_dir(&dst.join("build"))
+        .arg(&format!("-j{}", env::var("NUM_JOBS").unwrap()))
+        .status()
+        .expect("failed to make");
+
+    // make install
+    Command::new("make")
+        .current_dir(&dst.join("build"))
+        .arg("install")
+        .status()
+        .expect("failed to make install");
 }
