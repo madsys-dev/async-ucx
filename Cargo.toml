@@ -14,7 +14,7 @@ categories = ["asynchronous", "api-bindings", "network-programming"]
 
 [features]
 event = ["tokio"]
-am = ["tokio", "crossbeam"]
+am = ["tokio/sync", "crossbeam"]
 
 [dependencies]
 ucx1-sys = { version = "0.1", path = "ucx1-sys" }
