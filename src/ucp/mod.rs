@@ -7,7 +7,7 @@ use std::os::raw::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::Arc;
-use ucx_sys::*;
+use ucx1_sys::*;
 
 mod endpoint;
 mod listener;

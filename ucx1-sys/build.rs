@@ -49,7 +49,6 @@ fn main() {
 }
 
 fn build_from_source() {
-    let src = env::current_dir().unwrap();
     let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     // Return if the outputs exist.
@@ -71,9 +70,18 @@ fn build_from_source() {
     // Create build directory.
     let _ = std::fs::create_dir(&dst.join("build"));
 
+    // Copy source.
+    if !dst.join("ucx").exists() {
+        let _ = Command::new("cp")
+            .arg("-r")
+            .arg("ucx")
+            .arg(dst.join("ucx"))
+            .status();
+    }
+
     // autogen.sh
     Command::new("bash")
-        .current_dir(&src.join("ucx"))
+        .current_dir(&dst.join("ucx"))
         .arg("./autogen.sh")
         .status()
         .expect("failed to run autogen.sh");
@@ -81,7 +89,7 @@ fn build_from_source() {
     // configure
     Command::new("bash")
         .current_dir(&dst.join("build"))
-        .arg(&src.join("ucx/contrib/configure-release"))
+        .arg(&dst.join("ucx/contrib/configure-release"))
         .arg(&format!("--prefix={}", dst.display()))
         .status()
         .expect("failed to configure");

@@ -1,9 +1,9 @@
 #![deny(warnings)]
 
-use ucx_sys::ucs_status_ptr_t;
-use ucx_sys::ucs_status_t;
-use ucx_sys::UCS_PTR_IS_ERR;
-use ucx_sys::UCS_PTR_RAW_STATUS;
+use ucx1_sys::ucs_status_ptr_t;
+use ucx1_sys::ucs_status_t;
+use ucx1_sys::UCS_PTR_IS_ERR;
+use ucx1_sys::UCS_PTR_RAW_STATUS;
 
 #[macro_use]
 extern crate log;

@@ -1,0 +1,16 @@
+[package]
+name = "ucx1-sys"
+version = "0.1.0"
+authors = ["Runji Wang <wangrunji0408@163.com>"]
+edition = "2021"
+description = "Rust FFI bindings to UCX."
+homepage = "https://github.com/madsys-dev/async-ucx"
+repository = "https://github.com/madsys-dev/async-ucx"
+license = "MIT"
+keywords = ["ucx", "bindings"]
+categories = ["external-ffi-bindings"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+bindgen = "0.59"
