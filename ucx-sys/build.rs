@@ -7,10 +7,10 @@ fn main() {
 
     // Tell cargo to tell rustc to link the library.
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
-    println!("cargo:rustc-link-lib=static=uct");
-    println!("cargo:rustc-link-lib=static=ucs");
-    println!("cargo:rustc-link-lib=static=ucm");
-    println!("cargo:rustc-link-lib=static=ucp");
+    println!("cargo:rustc-link-lib=ucp");
+    // println!("cargo:rustc-link-lib=uct");
+    // println!("cargo:rustc-link-lib=ucs");
+    // println!("cargo:rustc-link-lib=ucm");
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
