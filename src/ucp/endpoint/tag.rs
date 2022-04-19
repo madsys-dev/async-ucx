@@ -2,12 +2,14 @@ use super::*;
 use std::io::{IoSlice, IoSliceMut};
 
 impl Worker {
+    /// Receives a message with `tag`.
     pub async fn tag_recv(&self, tag: u64, buf: &mut [MaybeUninit<u8>]) -> Result<usize, Error> {
         self.tag_recv_mask(tag, u64::max_value(), buf)
             .await
             .map(|info| info.1)
     }
 
+    /// Receives a message with `tag` and `tag_mask`.
     pub async fn tag_recv_mask(
         &self,
         tag: u64,
@@ -56,6 +58,7 @@ impl Worker {
         .await
     }
 
+    /// Like `tag_recv`, except that it reads into a slice of buffers.
     pub async fn tag_recv_vectored(
         &self,
         tag: u64,
@@ -103,6 +106,7 @@ impl Worker {
 }
 
 impl Endpoint {
+    /// Sends a messages with `tag`.
     pub async fn tag_send(&self, tag: u64, buf: &[u8]) -> Result<usize, Error> {
         trace!("tag_send: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
@@ -134,6 +138,7 @@ impl Endpoint {
         Ok(buf.len())
     }
 
+    /// Like `tag_send`, except that it reads into a slice of buffers.
     pub async fn tag_send_vectored(&self, tag: u64, iov: &[IoSlice<'_>]) -> Result<usize, Error> {
         trace!(
             "tag_send_vectored: endpoint={:?} iov.len={}",

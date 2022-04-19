@@ -6,6 +6,7 @@ use futures::stream::StreamExt;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 
+/// Listening on a specific address and accepting connections from clients.
 #[derive(Debug)]
 pub struct Listener {
     handle: ucp_listener_h,
@@ -14,6 +15,9 @@ pub struct Listener {
     recver: mpsc::UnboundedReceiver<ConnectionRequest>,
 }
 
+/// An incoming connection request.
+///
+/// The request must be explicitly accepted by [Worker::accept] or rejected by [Listener::reject].
 #[derive(Debug)]
 #[must_use = "connection must be accepted or rejected"]
 pub struct ConnectionRequest {
@@ -83,6 +87,7 @@ impl Listener {
         })
     }
 
+    /// Returns the local socket address of this listener.
     pub fn socket_addr(&self) -> Result<SocketAddr, Error> {
         #[allow(clippy::uninit_assumed_init)]
         let mut attr = ucp_listener_attr_t {
@@ -98,6 +103,7 @@ impl Listener {
         Ok(sockaddr.into_addr().unwrap())
     }
 
+    /// Waiting for the next connection request.
     pub async fn next(&mut self) -> ConnectionRequest {
         self.recver.next().await.unwrap()
     }

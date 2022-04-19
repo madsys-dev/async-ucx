@@ -1,4 +1,7 @@
+//! Asynchronous Rust bindings to UCX.
+
 #![deny(warnings)]
+#![deny(missing_docs)]
 
 use ucx1_sys::ucs_status_ptr_t;
 use ucx1_sys::ucs_status_t;
@@ -25,6 +28,8 @@ macro_rules! spawn_thread {
 
 pub mod ucp;
 
+/// UCX error code.
+#[allow(missing_docs)]
 #[repr(i8)]
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum Error {

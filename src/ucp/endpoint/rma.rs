@@ -1,5 +1,7 @@
 use super::*;
 
+/// A memory region allocated through UCP library,
+/// which is optimized for remote memory access operations.
 #[derive(Debug)]
 pub struct MemoryHandle {
     handle: ucp_mem_h,
@@ -7,6 +9,7 @@ pub struct MemoryHandle {
 }
 
 impl MemoryHandle {
+    /// Register memory region.
     pub fn register(context: &Arc<Context>, region: &mut [u8]) -> Self {
         #[allow(invalid_value)]
         #[allow(clippy::uninit_assumed_init)]
@@ -53,6 +56,7 @@ impl Drop for MemoryHandle {
     }
 }
 
+/// An owned buffer containing remote access key.
 #[derive(Debug)]
 pub struct RKeyBuffer {
     buf: *mut c_void,
@@ -71,6 +75,7 @@ impl Drop for RKeyBuffer {
     }
 }
 
+/// Remote access key.
 #[derive(Debug)]
 pub struct RKey {
     handle: ucp_rkey_h,
@@ -80,6 +85,7 @@ unsafe impl Send for RKey {}
 unsafe impl Sync for RKey {}
 
 impl RKey {
+    /// Create remote access key from packed buffer.
     pub fn unpack(endpoint: &Endpoint, rkey_buffer: &[u8]) -> Self {
         let mut handle = MaybeUninit::uninit();
         let status = unsafe {
@@ -103,6 +109,7 @@ impl Drop for RKey {
 }
 
 impl Endpoint {
+    /// Stores a contiguous block of data into remote memory.
     pub async fn put(&self, buf: &[u8], remote_addr: u64, rkey: &RKey) -> Result<(), Error> {
         trace!("put: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
@@ -134,6 +141,7 @@ impl Endpoint {
         }
     }
 
+    /// Loads a contiguous block of data from remote memory.
     pub async fn get(&self, buf: &mut [u8], remote_addr: u64, rkey: &RKey) -> Result<(), Error> {
         trace!("get: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {

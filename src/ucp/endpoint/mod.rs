@@ -73,6 +73,7 @@ impl EndpointInner {
     }
 }
 
+/// Communication endpoint.
 #[derive(Debug, Clone)]
 pub struct Endpoint {
     handle: ucp_ep_h,
@@ -189,10 +190,12 @@ impl Endpoint {
         Ok(endpoint)
     }
 
+    /// Whether the endpoint is closed.
     pub fn is_closed(&self) -> bool {
         self.inner.is_closed()
     }
 
+    /// Get the endpoint status.
     pub fn get_status(&self) -> Result<(), Error> {
         self.inner.check()
     }
@@ -203,6 +206,7 @@ impl Endpoint {
         Ok(self.handle)
     }
 
+    /// Print endpoint information to stderr.
     pub fn print_to_stderr(&self) {
         if !self.inner.is_closed() {
             unsafe { ucp_ep_print_info(self.handle, stderr) };
@@ -274,6 +278,7 @@ impl Endpoint {
         }
     }
 
+    /// Get the worker of the endpoint.
     pub fn worker(&self) -> &Rc<Worker> {
         &self.inner.worker
     }

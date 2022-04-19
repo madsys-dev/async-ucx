@@ -1,6 +1,7 @@
 use super::*;
 
 impl Endpoint {
+    /// Sends data through stream.
     pub async fn stream_send(&self, buf: &[u8]) -> Result<usize, Error> {
         trace!("stream_send: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t) {
@@ -36,6 +37,7 @@ impl Endpoint {
         Ok(buf.len())
     }
 
+    /// Receives data from stream.
     pub async fn stream_recv(&self, buf: &mut [MaybeUninit<u8>]) -> Result<usize, Error> {
         trace!("stream_recv: endpoint={:?} len={}", self.handle, buf.len());
         unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t, length: u64) {

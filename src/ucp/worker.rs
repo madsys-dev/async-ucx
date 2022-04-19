@@ -82,6 +82,7 @@ impl Worker {
         unsafe { ucp_worker_print_info(self.handle, stderr) };
     }
 
+    /// Thread safe level of the context.
     pub fn thread_mode(&self) -> ucs_thread_mode_t {
         let mut attr = MaybeUninit::<ucp_worker_attr>::uninit();
         unsafe { &mut *attr.as_mut_ptr() }.field_mask =
@@ -111,18 +112,22 @@ impl Worker {
         })
     }
 
+    /// Create a new [`Listener`].
     pub fn create_listener(self: &Rc<Self>, addr: SocketAddr) -> Result<Listener, Error> {
         Listener::new(self, addr)
     }
 
+    /// Connect to a remote worker by address.
     pub fn connect_addr(self: &Rc<Self>, addr: &WorkerAddress) -> Result<Endpoint, Error> {
         Endpoint::connect_addr(self, addr.handle)
     }
 
+    /// Connect to a remote listener.
     pub async fn connect_socket(self: &Rc<Self>, addr: SocketAddr) -> Result<Endpoint, Error> {
         Endpoint::connect_socket(self, addr).await
     }
 
+    /// Accept a connection request.
     pub async fn accept(self: &Rc<Self>, connection: ConnectionRequest) -> Result<Endpoint, Error> {
         Endpoint::accept(self, connection).await
     }
