@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 #[derive(Debug)]
 pub struct Listener {
     handle: ucp_listener_h,
+    #[allow(unused)]
     sender: Rc<mpsc::UnboundedSender<ConnectionRequest>>,
     recver: mpsc::UnboundedReceiver<ConnectionRequest>,
 }
@@ -119,7 +120,7 @@ impl Drop for Listener {
 mod tests {
     use super::*;
 
-    #[test_env_log::test]
+    #[test_log::test]
     fn accept() {
         let (sender, recver) = tokio::sync::oneshot::channel();
         let f1 = spawn_thread!(async move {

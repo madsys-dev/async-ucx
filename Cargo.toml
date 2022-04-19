@@ -25,7 +25,7 @@ thiserror = "1.0"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["rt", "time", "macros", "sync"] }
-env_logger = "0.8"
-tracing = {version = "0.1", default-features = false}
-tracing-subscriber = {version = "0.2.17", default-features = false, features = ["env-filter", "fmt"]}
-test-env-log = "0.2.7"
+env_logger = "0.9"
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.2.17", default-features = false, features = ["env-filter", "fmt"] }
+test-log = "0.2"

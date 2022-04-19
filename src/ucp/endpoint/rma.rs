@@ -169,7 +169,7 @@ impl Endpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test_env_log::test]
+    #[test_log::test]
     fn put_get() {
         spawn_thread!(_put_get()).join().unwrap();
     }

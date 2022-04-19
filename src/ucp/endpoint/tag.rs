@@ -191,7 +191,7 @@ unsafe fn poll_tag(ptr: ucs_status_ptr_t) -> Poll<Result<(u64, usize), Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test_env_log::test]
+    #[test_log::test]
     fn tag() {
         for i in 0..20_usize {
             spawn_thread!(_tag(4 << i)).join().unwrap();

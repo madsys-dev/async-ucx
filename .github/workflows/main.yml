@@ -22,13 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Install UCX
-      run: |
-        sudo apt install libnuma-dev
-        wget https://github.com/openucx/ucx/releases/download/v1.11.0/ucx-1.11.0.tar.gz
-        tar xf ucx-1.11.0.tar.gz
-        cd ucx-1.11.0 && mkdir build && cd build
-        ../contrib/configure-release --with-java=no && make -j && sudo make install -j
+    - name: Install UCX dependencies
+      run: sudo apt install libnuma-dev
     - name: Build
       uses: actions-rs/cargo@v1
       with:

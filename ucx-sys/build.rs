@@ -11,8 +11,6 @@ fn main() {
     println!("cargo:rustc-link-lib=static=ucs");
     println!("cargo:rustc-link-lib=static=ucm");
     println!("cargo:rustc-link-lib=static=ucp");
-    println!("cargo:root={}", dst.display());
-    println!("cargo:include={}/include", dst.display());
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
@@ -23,8 +21,8 @@ fn main() {
     // to bindgen, and lets you build up options for
     // the resulting bindings.
     let bindings = bindgen::Builder::default()
-        // The input header we would like to generate
-        // bindings for.
+        .clang_arg(format!("-I{}", dst.join("include").display()))
+        // The input header we would like to generate bindings for.
         .header("wrapper.h")
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
@@ -74,14 +72,14 @@ fn build_from_source() {
     let _ = std::fs::create_dir(&dst.join("build"));
 
     // autogen.sh
-    Command::new("sh")
+    Command::new("bash")
         .current_dir(&src.join("ucx"))
         .arg("./autogen.sh")
         .status()
         .expect("failed to run autogen.sh");
 
     // configure
-    Command::new("sh")
+    Command::new("bash")
         .current_dir(&dst.join("build"))
         .arg(&src.join("ucx/contrib/configure-release"))
         .arg(&format!("--prefix={}", dst.display()))

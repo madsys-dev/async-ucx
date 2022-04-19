@@ -557,7 +557,7 @@ unsafe fn poll_recv(ptr: ucs_status_ptr_t) -> Poll<()> {
 mod tests {
     use super::*;
 
-    #[test_env_log::test]
+    #[test_log::test]
     fn am() {
         for i in 0..20_usize {
             spawn_thread!(send_recv(4 << i)).join().unwrap();
