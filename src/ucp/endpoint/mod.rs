@@ -128,7 +128,7 @@ impl Endpoint {
         worker: &Rc<Worker>,
         addr: SocketAddr,
     ) -> Result<Self, Error> {
-        let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
+        let sockaddr = socket2::SockAddr::from(addr);
         #[allow(invalid_value)]
         #[allow(clippy::uninit_assumed_init)]
         let params = ucp_ep_params {

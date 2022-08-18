@@ -40,9 +40,9 @@ impl ConnectionRequest {
         Error::from_status(status)?;
 
         let sockaddr = unsafe {
-            os_socketaddr::OsSocketAddr::from_raw_parts(&attr.client_address as *const _ as _, 8)
+            socket2::SockAddr::new(std::mem::transmute(attr.client_address), 8)
         };
-        Ok(sockaddr.into_addr().unwrap())
+        Ok(sockaddr.as_socket().unwrap())
     }
 }
 
@@ -58,7 +58,7 @@ impl Listener {
         }
         let (sender, recver) = mpsc::unbounded();
         let sender = Rc::new(sender);
-        let sockaddr = os_socketaddr::OsSocketAddr::from(addr);
+        let sockaddr = socket2::SockAddr::from(addr);
         let params = ucp_listener_params_t {
             field_mask: (ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_SOCK_ADDR
                 | ucp_listener_params_field::UCP_LISTENER_PARAM_FIELD_CONN_HANDLER)
@@ -97,10 +97,10 @@ impl Listener {
         let status = unsafe { ucp_listener_query(self.handle, &mut attr) };
         Error::from_status(status)?;
         let sockaddr = unsafe {
-            os_socketaddr::OsSocketAddr::from_raw_parts(&attr.sockaddr as *const _ as _, 8)
+            socket2::SockAddr::new(std::mem::transmute(attr.sockaddr), 8)
         };
 
-        Ok(sockaddr.into_addr().unwrap())
+        Ok(sockaddr.as_socket().unwrap())
     }
 
     /// Waiting for the next connection request.
