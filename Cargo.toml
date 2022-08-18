@@ -18,7 +18,7 @@ am = ["tokio/sync", "crossbeam"]
 
 [dependencies]
 ucx1-sys = { version = "0.1", path = "ucx1-sys" }
-os_socketaddr = "0.1"
+socket2 = "0.4"
 futures = "0.3"
 futures-lite = "1.11"
 lazy_static = "1.4"
