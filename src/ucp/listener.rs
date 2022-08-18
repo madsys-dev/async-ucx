@@ -39,9 +39,8 @@ impl ConnectionRequest {
         let status = unsafe { ucp_conn_request_query(self.handle, &mut attr) };
         Error::from_status(status)?;
 
-        let sockaddr = unsafe {
-            socket2::SockAddr::new(std::mem::transmute(attr.client_address), 8)
-        };
+        let sockaddr =
+            unsafe { socket2::SockAddr::new(std::mem::transmute(attr.client_address), 8) };
         Ok(sockaddr.as_socket().unwrap())
     }
 }
@@ -96,9 +95,7 @@ impl Listener {
         };
         let status = unsafe { ucp_listener_query(self.handle, &mut attr) };
         Error::from_status(status)?;
-        let sockaddr = unsafe {
-            socket2::SockAddr::new(std::mem::transmute(attr.sockaddr), 8)
-        };
+        let sockaddr = unsafe { socket2::SockAddr::new(std::mem::transmute(attr.sockaddr), 8) };
 
         Ok(sockaddr.as_socket().unwrap())
     }
