@@ -18,16 +18,16 @@ async fn client(server_addr: String) -> Result<()> {
     println!("client: connect to {:?}", server_addr);
     let context = Context::new().unwrap();
     let worker = context.create_worker().unwrap();
-    let endpoint = worker
-        .connect_socket(server_addr.parse().unwrap())
-        .await
-        .unwrap();
-    endpoint.print_to_stderr();
     #[cfg(not(feature = "event"))]
     tokio::task::spawn_local(worker.clone().polling());
     #[cfg(feature = "event")]
     tokio::task::spawn_local(worker.clone().event_poll());
 
+    let endpoint = worker
+        .connect_socket(server_addr.parse().unwrap())
+        .await
+        .unwrap();
+    endpoint.print_to_stderr();
     // register memory region
     let mut buf: Vec<u8> = (0..0x1000).map(|x| x as u8).collect();
     let mem = MemoryHandle::register(&context, &mut buf);
