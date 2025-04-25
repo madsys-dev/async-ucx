@@ -16,8 +16,6 @@ mod tag;
 #[cfg(feature = "am")]
 pub use self::am::*;
 pub use self::rma::*;
-pub use self::stream::*;
-pub use self::tag::*;
 
 // State associate with ucp_ep_h
 // todo: Add a `get_user_data` to UCX
@@ -111,7 +109,7 @@ impl Endpoint {
             arg: std::ptr::null_mut(), // override by user_data
         };
 
-        let mut handle = MaybeUninit::uninit();
+        let mut handle = MaybeUninit::<*mut ucp_ep>::uninit();
         let status = unsafe { ucp_ep_create(worker.handle, &params, handle.as_mut_ptr()) };
         if let Err(err) = Error::from_status(status) {
             // error happened, drop reference
@@ -142,7 +140,7 @@ impl Endpoint {
                 addrlen: sockaddr.len(),
             },
             err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
-            ..unsafe { MaybeUninit::uninit().assume_init() }
+            ..unsafe { MaybeUninit::zeroed().assume_init() }
         };
         let endpoint = Endpoint::create(worker, params)?;
 
@@ -157,15 +155,13 @@ impl Endpoint {
         worker: &Rc<Worker>,
         addr: *const ucp_address_t,
     ) -> Result<Self, Error> {
-        #[allow(invalid_value)]
-        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_ep_params {
             field_mask: (ucp_ep_params_field::UCP_EP_PARAM_FIELD_REMOTE_ADDRESS
                 | ucp_ep_params_field::UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE)
                 .0 as u64,
             address: addr,
             err_mode: ucp_err_handling_mode_t::UCP_ERR_HANDLING_MODE_PEER,
-            ..unsafe { MaybeUninit::uninit().assume_init() }
+            ..unsafe { MaybeUninit::zeroed().assume_init() }
         };
         Endpoint::create(worker, params)
     }
@@ -174,12 +170,10 @@ impl Endpoint {
         worker: &Rc<Worker>,
         connection: ConnectionRequest,
     ) -> Result<Self, Error> {
-        #[allow(invalid_value)]
-        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_ep_params {
             field_mask: ucp_ep_params_field::UCP_EP_PARAM_FIELD_CONN_REQUEST.0 as u64,
             conn_request: connection.handle,
-            ..unsafe { MaybeUninit::uninit().assume_init() }
+            ..unsafe { MaybeUninit::zeroed().assume_init() }
         };
         let endpoint = Endpoint::create(worker, params)?;
 

@@ -34,7 +34,7 @@ impl Worker {
                 ucp_worker_params_field::UCP_WORKER_PARAM_FIELD_THREAD_MODE.0 as _;
             (*params.as_mut_ptr()).thread_mode = ucs_thread_mode_t::UCS_THREAD_MODE_SINGLE;
         };
-        let mut handle = MaybeUninit::uninit();
+        let mut handle = MaybeUninit::<*mut ucp_worker>::uninit();
         let status =
             unsafe { ucp_worker_create(context.handle, params.as_ptr(), handle.as_mut_ptr()) };
         Error::from_status(status)?;
@@ -98,8 +98,8 @@ impl Worker {
     /// This address can be passed to remote instances of the UCP library
     /// in order to connect to this worker.
     pub fn address(&self) -> Result<WorkerAddress<'_>, Error> {
-        let mut handle = MaybeUninit::uninit();
-        let mut length = MaybeUninit::uninit();
+        let mut handle = MaybeUninit::<*mut ucp_address>::uninit();
+        let mut length = MaybeUninit::<usize>::uninit();
         let status = unsafe {
             ucp_worker_get_address(self.handle, handle.as_mut_ptr(), length.as_mut_ptr())
         };
@@ -157,7 +157,7 @@ impl Worker {
 
     /// Returns a valid file descriptor for polling functions.
     pub fn event_fd(&self) -> Result<i32, Error> {
-        let mut fd = MaybeUninit::uninit();
+        let mut fd = MaybeUninit::<i32>::uninit();
         let status = unsafe { ucp_worker_get_efd(self.handle, fd.as_mut_ptr()) };
         Error::from_status(status)?;
 

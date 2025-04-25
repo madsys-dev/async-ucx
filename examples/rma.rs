@@ -62,13 +62,13 @@ async fn server() -> Result<()> {
     println!("accept");
     endpoint.print_to_stderr();
 
-    let mut vaddr_buf = [MaybeUninit::uninit(); 8];
+    let mut vaddr_buf = [MaybeUninit::<u8>::uninit(); 8];
     let len = endpoint.stream_recv(&mut vaddr_buf).await.unwrap();
     assert_eq!(len, 8);
     let vaddr = u64::from_ne_bytes(unsafe { transmute(vaddr_buf) });
     println!("recv: vaddr={:#x}", vaddr);
 
-    let mut rkey_buf = [MaybeUninit::uninit(); 100];
+    let mut rkey_buf = [MaybeUninit::<u8>::uninit(); 100];
     let len = endpoint.stream_recv(&mut rkey_buf).await.unwrap();
     println!("recv rkey: len={}", len);
 

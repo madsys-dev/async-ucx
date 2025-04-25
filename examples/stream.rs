@@ -53,7 +53,7 @@ async fn server() -> Result<()> {
     println!("accept");
     endpoint.print_to_stderr();
 
-    let mut buf = [MaybeUninit::uninit(); 10];
+    let mut buf = [MaybeUninit::<u8>::uninit(); 10];
     let len = endpoint.stream_recv(&mut buf).await.unwrap();
     let msg = std::str::from_utf8(unsafe { transmute(&buf[..len]) });
     println!("recv: {:?}", msg);

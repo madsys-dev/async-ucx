@@ -19,9 +19,9 @@ impl MemoryHandle {
                 .0 as u64,
             address: region.as_ptr() as _,
             length: region.len() as _,
-            ..unsafe { MaybeUninit::uninit().assume_init() }
+            ..unsafe { MaybeUninit::zeroed().assume_init() }
         };
-        let mut handle = MaybeUninit::uninit();
+        let mut handle = MaybeUninit::<*mut ucp_mem>::uninit();
         let status = unsafe { ucp_mem_map(context.handle, &params, handle.as_mut_ptr()) };
         assert_eq!(status, ucs_status_t::UCS_OK);
         MemoryHandle {
@@ -32,8 +32,8 @@ impl MemoryHandle {
 
     /// Packs into the buffer a remote access key (RKEY) object.
     pub fn pack(&self) -> RKeyBuffer {
-        let mut buf = MaybeUninit::uninit();
-        let mut len = MaybeUninit::uninit();
+        let mut buf = MaybeUninit::<*mut c_void>::uninit();
+        let mut len = MaybeUninit::<usize>::uninit();
         let status = unsafe {
             ucp_rkey_pack(
                 self.context.handle,
@@ -60,7 +60,7 @@ impl Drop for MemoryHandle {
 #[derive(Debug)]
 pub struct RKeyBuffer {
     buf: *mut c_void,
-    len: u64,
+    len: usize,
 }
 
 impl AsRef<[u8]> for RKeyBuffer {
@@ -87,7 +87,7 @@ unsafe impl Sync for RKey {}
 impl RKey {
     /// Create remote access key from packed buffer.
     pub fn unpack(endpoint: &Endpoint, rkey_buffer: &[u8]) -> Self {
-        let mut handle = MaybeUninit::uninit();
+        let mut handle = MaybeUninit::<*mut ucp_rkey>::uninit();
         let status = unsafe {
             ucp_ep_rkey_unpack(
                 endpoint.handle,
