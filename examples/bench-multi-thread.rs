@@ -17,7 +17,6 @@ async fn main() -> Result<()> {
     } else {
         local.run_until(server()).await;
     }
-    Ok(())
 }
 
 async fn client(server_addr: String) -> ! {
@@ -72,7 +71,7 @@ async fn server() -> ! {
                 loop {
                     ep.worker().tag_recv(tag, &mut buf).await.unwrap();
                     // ep.tag_send(tag, &[0]).await;
-                    unsafe { *(&*counter as *const AtomicUsize as *mut usize) += 1 };
+                    counter.fetch_add(1, Ordering::Relaxed);
                 }
             });
         });
