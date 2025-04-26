@@ -132,7 +132,7 @@ impl Context {
         let mut attr = MaybeUninit::<ucp_context_attr>::uninit();
         let status = unsafe { ucp_context_query(self.handle, attr.as_mut_ptr()) };
         Error::from_status(status)?;
-        Ok(unsafe {attr.assume_init()})
+        Ok(unsafe { attr.assume_init() })
     }
 }
 

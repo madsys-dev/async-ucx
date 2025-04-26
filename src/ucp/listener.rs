@@ -91,7 +91,7 @@ impl Listener {
             field_mask: ucp_listener_attr_field::UCP_LISTENER_ATTR_FIELD_SOCKADDR.0 as u64,
             sockaddr: unsafe { MaybeUninit::zeroed().assume_init() },
         };
-        let status = unsafe {ucp_listener_query(self.handle, &mut attr) };
+        let status = unsafe { ucp_listener_query(self.handle, &mut attr) };
         Error::from_status(status)?;
         let sockaddr = unsafe { socket2::SockAddr::new(std::mem::transmute(attr.sockaddr), 8) };
 
