@@ -662,7 +662,10 @@ mod tests {
         tokio::join!(
             async {
                 // send reply
-                let result = unsafe { msg.reply(12, &header, &data, false, Some(Rndv)).await };
+                let result = unsafe {
+                    msg.reply(12, &header, &data, false, Some(AmProto::Rndv))
+                        .await
+                };
                 assert!(result.is_ok());
             },
             async {
