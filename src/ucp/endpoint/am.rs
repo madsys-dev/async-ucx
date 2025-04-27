@@ -620,12 +620,12 @@ mod tests {
         let protos = vec![None, Some(AmProto::Eager), Some(AmProto::Rndv)];
         for block_size_shift in 0..20_usize {
             for p in protos.iter() {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_time()
-                        .build()
-                        .unwrap();
-                    let local = tokio::task::LocalSet::new();
-                    local.block_on(&rt, send_recv(4 << block_size_shift, *p));
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap();
+                let local = tokio::task::LocalSet::new();
+                local.block_on(&rt, send_recv(4 << block_size_shift, *p));
             }
         }
     }
