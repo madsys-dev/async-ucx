@@ -27,7 +27,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let mut handle = MaybeUninit::uninit();
+        let mut handle = MaybeUninit::<*mut ucp_config>::uninit();
         let status = unsafe { ucp_config_read(null(), null(), handle.as_mut_ptr()) };
         Error::from_status(status).unwrap();
 
@@ -83,7 +83,6 @@ impl Context {
         #[cfg(feature = "am")]
         let features = features | ucp_feature::UCP_FEATURE_AM;
 
-        #[allow(clippy::uninit_assumed_init)]
         let params = ucp_params_t {
             field_mask: (ucp_params_field::UCP_PARAM_FIELD_FEATURES
                 | ucp_params_field::UCP_PARAM_FIELD_REQUEST_SIZE
@@ -92,13 +91,13 @@ impl Context {
                 | ucp_params_field::UCP_PARAM_FIELD_MT_WORKERS_SHARED)
                 .0 as u64,
             features: features.0 as u64,
-            request_size: std::mem::size_of::<Request>() as u64,
+            request_size: std::mem::size_of::<Request>() as usize,
             request_init: Some(Request::init),
             request_cleanup: Some(Request::cleanup),
             mt_workers_shared: 1,
-            ..unsafe { MaybeUninit::uninit().assume_init() }
+            ..unsafe { std::mem::zeroed() }
         };
-        let mut handle = MaybeUninit::uninit();
+        let mut handle = MaybeUninit::<*mut ucp_context>::uninit();
         let status = unsafe {
             ucp_init_version(
                 UCP_API_MAJOR,
@@ -130,18 +129,10 @@ impl Context {
 
     /// Fetches information about the context.
     pub fn query(&self) -> Result<ucp_context_attr, Error> {
-        #[allow(invalid_value)]
-        #[allow(clippy::uninit_assumed_init)]
-        let mut attr = ucp_context_attr {
-            field_mask: (ucp_context_attr_field::UCP_ATTR_FIELD_REQUEST_SIZE
-                | ucp_context_attr_field::UCP_ATTR_FIELD_THREAD_MODE)
-                .0 as u64,
-            ..unsafe { MaybeUninit::uninit().assume_init() }
-        };
-        let status = unsafe { ucp_context_query(self.handle, &mut attr) };
+        let mut attr = MaybeUninit::<ucp_context_attr>::uninit();
+        let status = unsafe { ucp_context_query(self.handle, attr.as_mut_ptr()) };
         Error::from_status(status)?;
-
-        Ok(attr)
+        Ok(unsafe { attr.assume_init() })
     }
 }
 

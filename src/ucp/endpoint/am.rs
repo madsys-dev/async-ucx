@@ -8,10 +8,20 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+//// Active message protocol.
+/// Active message protocol is a mechanism for sending and receiving messages
+/// between processes in a distributed system.
+/// It allows a process to send a message to another process, which can then
+/// handle the message and perform some action based on its contents.
+/// Active messages are typically used in high-performance computing (HPC)
+/// applications, where low-latency communication is critical.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AmDataType {
+    /// Eager message
     Eager,
+    /// Data message
     Data,
+    /// Rendezvous message
     Rndv,
 }
 
@@ -88,6 +98,7 @@ impl RawMsg {
     }
 }
 
+/// Active message message.
 pub struct AmMsg<'a> {
     worker: &'a Worker,
     msg: RawMsg,
@@ -98,35 +109,44 @@ impl<'a> AmMsg<'a> {
         AmMsg { worker, msg }
     }
 
+    /// Get the message ID.
     #[inline]
     pub fn id(&self) -> u16 {
         self.msg.id
     }
 
+    /// Get the message header.
     #[inline]
     pub fn header(&self) -> &[u8] {
         self.msg.header.as_ref()
     }
 
+    /// Get the message header length.
     #[inline]
     pub fn contains_data(&self) -> bool {
         self.data_type().is_some()
     }
 
+    /// Get the message data type.
     pub fn data_type(&self) -> Option<AmDataType> {
         self.msg.data.as_ref().map(|data| data.data_type())
     }
 
+    /// Get the message data.
+    /// Returns `None` if the message doesn't contain data.
     #[inline]
     pub fn get_data(&self) -> Option<&[u8]> {
         self.msg.data.as_ref().and_then(|data| data.data())
     }
 
+    /// Get the message data length.
+    /// Returns `0` if the message doesn't contain data.
     #[inline]
     pub fn data_len(&self) -> usize {
         self.msg.data.as_ref().map_or(0, |data| data.len())
     }
 
+    /// Receive the message data.
     pub async fn recv_data(&mut self) -> Result<Vec<u8>, Error> {
         match self.msg.data.take() {
             None => Ok(Vec::new()),
@@ -144,6 +164,12 @@ impl<'a> AmMsg<'a> {
         }
     }
 
+    /// Receive the message data.
+    /// Returns `0` if the message doesn't contain data.
+    /// Returns the number of bytes received.
+    /// # Safety
+    /// User needs to ensure that the buffer is large enough to hold the data.
+    /// Otherwise, it will cause memory corruption.
     pub async fn recv_data_single(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         if !self.contains_data() {
             Ok(0)
@@ -153,6 +179,7 @@ impl<'a> AmMsg<'a> {
         }
     }
 
+    /// Receive the message data.
     pub async fn recv_data_vectored(&mut self, iov: &[IoSliceMut<'_>]) -> Result<usize, Error> {
         let data = self.msg.data.take();
         if let Some(data) = data {
@@ -192,7 +219,7 @@ impl<'a> AmMsg<'a> {
             unsafe extern "C" fn callback(
                 request: *mut c_void,
                 status: ucs_status_t,
-                _length: u64,
+                _length: usize,
                 _data: *mut c_void,
             ) {
                 // todo: handle error & fix real data length
@@ -255,6 +282,7 @@ impl<'a> AmMsg<'a> {
         }
     }
 
+    /// Check if the message needs a reply.
     #[inline]
     pub fn need_reply(&self) -> bool {
         self.msg.attr & (ucp_am_recv_attr_t::UCP_AM_RECV_ATTR_FIELD_REPLY_EP as u64) != 0
@@ -309,6 +337,7 @@ impl<'a> Drop for AmMsg<'a> {
     }
 }
 
+/// Active message stream.
 #[derive(Clone)]
 pub struct AmStream<'a> {
     worker: &'a Worker,
@@ -383,9 +412,9 @@ impl Worker {
         unsafe extern "C" fn callback(
             arg: *mut c_void,
             header: *const c_void,
-            header_len: u64,
+            header_len: usize,
             data: *mut c_void,
-            data_len: u64,
+            data_len: usize,
             param: *const ucp_am_recv_param_t,
         ) -> ucs_status_t {
             let handler = &*(arg as *const AmStreamInner);
@@ -442,7 +471,9 @@ impl Worker {
     }
 }
 
+/// Active message endpoint.
 impl Endpoint {
+    /// Send active message.
     pub async fn am_send(
         &self,
         id: u32,
@@ -456,6 +487,7 @@ impl Endpoint {
             .await
     }
 
+    /// Send active message.
     pub async fn am_send_vectorized(
         &self,
         id: u32,
@@ -469,8 +501,11 @@ impl Endpoint {
     }
 }
 
+/// Active message protocol
 pub enum AmProto {
+    /// Eager protocol
     Eager,
+    /// Rendezvous protocol
     Rndv,
 }
 
@@ -601,7 +636,7 @@ mod tests {
                         header.as_slice(),
                         data.as_slice(),
                         true,
-                        Some(AmProto::Eager),
+                        Some(AmProto::Rndv),
                     )
                     .await;
                 assert!(result.is_ok());
@@ -627,7 +662,10 @@ mod tests {
         tokio::join!(
             async {
                 // send reply
-                let result = unsafe { msg.reply(12, &header, &data, false, None).await };
+                let result = unsafe {
+                    msg.reply(12, &header, &data, false, Some(AmProto::Rndv))
+                        .await
+                };
                 assert!(result.is_ok());
             },
             async {

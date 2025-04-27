@@ -12,7 +12,6 @@ async fn main() -> Result<()> {
     } else {
         local.run_until(server()).await;
     }
-    Ok(())
 }
 
 async fn client(server_addr: String) -> ! {

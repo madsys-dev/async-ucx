@@ -55,7 +55,7 @@ async fn server() -> Result<()> {
     let _endpoint = worker.accept(connection).await.unwrap();
     println!("accept");
 
-    let mut buf = [MaybeUninit::uninit(); 0x1005];
+    let mut buf = [MaybeUninit::<u8>::uninit(); 0x1005];
     let len = worker.tag_recv(100, &mut buf).await.unwrap();
     let msg = std::str::from_utf8(unsafe { transmute(&buf[..len]) }).unwrap();
     println!("recv: {:?}", msg);

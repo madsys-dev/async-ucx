@@ -40,7 +40,7 @@ impl Endpoint {
     /// Receives data from stream.
     pub async fn stream_recv(&self, buf: &mut [MaybeUninit<u8>]) -> Result<usize, Error> {
         trace!("stream_recv: endpoint={:?} len={}", self.handle, buf.len());
-        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t, length: u64) {
+        unsafe extern "C" fn callback(request: *mut c_void, status: ucs_status_t, length: usize) {
             trace!(
                 "stream_recv: complete. req={:?}, status={:?}, len={}",
                 request,
@@ -50,7 +50,7 @@ impl Endpoint {
             let request = &mut *(request as *mut Request);
             request.waker.wake();
         }
-        let mut length = MaybeUninit::uninit();
+        let mut length = MaybeUninit::<usize>::uninit();
         let status = unsafe {
             ucp_stream_recv_nb(
                 self.get_handle()?,

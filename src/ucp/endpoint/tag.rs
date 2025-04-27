@@ -238,7 +238,7 @@ mod tests {
             },
             async {
                 // recv
-                let mut buf = vec![MaybeUninit::uninit(); msg_size];
+                let mut buf = vec![MaybeUninit::<u8>::uninit(); msg_size];
                 worker1.tag_recv(1, &mut buf).await.unwrap();
                 println!("tag recved");
             }
