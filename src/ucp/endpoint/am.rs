@@ -636,7 +636,7 @@ mod tests {
                         header.as_slice(),
                         data.as_slice(),
                         true,
-                        Some(AmProto::Eager),
+                        Some(AmProto::Rndv),
                     )
                     .await;
                 assert!(result.is_ok());
@@ -662,7 +662,7 @@ mod tests {
         tokio::join!(
             async {
                 // send reply
-                let result = unsafe { msg.reply(12, &header, &data, false, None).await };
+                let result = unsafe { msg.reply(12, &header, &data, false, Some(Rndv)).await };
                 assert!(result.is_ok());
             },
             async {
